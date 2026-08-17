@@ -1095,7 +1095,15 @@ private static async planAndExecuteAgenticWorkflow(
 
     // 7. SHOW / FILTER CUSTOMER ORDERS (e.g. "Show new orders", "Show accepted orders", "Show preparing orders", "Show ready orders", "Show completed orders")
     if (
-      (text.includes('order') || text.includes('orders') || text.includes('pending') || text.includes('accepted') || text.includes('ready to serve') || text.includes('completed')) &&
+      (text.includes('show') || text.includes('view') || text.includes('list') || text.includes('display') || text.includes('filter') || text.includes('nodona') || text.includes('yestu') || text.includes('how many') || text.includes('all orders') || text.includes('customer orders')) &&
+      (text.includes('order') || text.includes('orders') || text.includes('pending')) &&
+      !text.includes('change') &&
+      !text.includes('mark') &&
+      !text.includes('shift') &&
+      !text.includes('move') &&
+      !text.includes('set') &&
+      !text.includes('undo') &&
+      !text.includes('revert') &&
       !text.includes('order maadi') &&
       !text.includes('purchase order') &&
       !text.includes('add')
