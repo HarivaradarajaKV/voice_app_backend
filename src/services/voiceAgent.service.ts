@@ -888,6 +888,11 @@ private static async planAndExecuteAgenticWorkflow(
         detectedLanguage: language,
         confirmationRequired: false,
         actionResult: updated,
+        uiNavigation: {
+          route: '/operations/orders',
+          filter: { status: targetStatus },
+          highlightId: updated.id,
+        },
         sessionState: { branchId: activeBranchId, activeEntity: session.currentEntity },
       };
     }
