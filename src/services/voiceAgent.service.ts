@@ -1238,34 +1238,51 @@ export class VoiceAgentService {
       };
     }
 
-    // 7. SHOW / FILTER CUSTOMER ORDERS (e.g. "Show new orders", "Show pending customer orders")
+    // 7. SHOW / FILTER CUSTOMER ORDERS (e.g. "Show new orders", "Show accepted orders", "Show preparing orders", "Show ready orders", "Show completed orders")
     if (
-      (text.includes('orders') || text.includes('pending orders') || text.includes('today orders') || text.includes('new orders')) &&
+      (text.includes('order') || text.includes('orders') || text.includes('pending') || text.includes('accepted') || text.includes('ready to serve') || text.includes('completed')) &&
       !text.includes('order maadi') &&
       !text.includes('purchase order') &&
-      !text.includes('add') &&
-      !text.includes('preparing') &&
-      !text.includes('kitchen') &&
-      !text.includes('kds')
+      !text.includes('add')
     ) {
-      const isNew = text.includes('new');
-      const isPending = text.includes('pending');
-      const filterStatus = isNew ? 'NEW' : isPending ? 'PENDING' : 'ALL';
+      let filterStatus = 'ALL';
+      let statusWhere: any = {};
+      let label = 'all';
+
+      if (text.includes('new') || text.includes('pending') || text.includes('hosadu')) {
+        filterStatus = 'NEW';
+        statusWhere = { orderStatus: 'NEW' };
+        label = 'new / pending';
+      } else if (text.includes('accepted') || text.includes('accept')) {
+        filterStatus = 'ACCEPTED';
+        statusWhere = { orderStatus: 'ACCEPTED' };
+        label = 'accepted';
+      } else if (text.includes('preparing') || text.includes('cooking') || text.includes('in kitchen')) {
+        filterStatus = 'PREPARING';
+        statusWhere = { orderStatus: 'PREPARING' };
+        label = 'preparing';
+      } else if (text.includes('ready') || text.includes('serve') || text.includes('ready to serve')) {
+        filterStatus = 'READY';
+        statusWhere = { orderStatus: 'READY' };
+        label = 'ready to serve';
+      } else if (text.includes('completed') || text.includes('finished') || text.includes('delivered')) {
+        filterStatus = 'COMPLETED';
+        statusWhere = { orderStatus: 'COMPLETED' };
+        label = 'completed';
+      }
 
       const count = await prisma.order.count({
         where: {
           branchId: activeBranchId,
-          ...(isNew ? { orderStatus: 'NEW' } : isPending ? { orderStatus: 'NEW' } : {}),
+          ...statusWhere,
         },
       });
 
       let spoken = '';
-      if (isNew) {
-        spoken = `Showing ${count} new customer orders on screen.`;
-      } else if (isPending) {
-        spoken = `Showing ${count} pending orders.`;
+      if (filterStatus === 'ALL') {
+        spoken = `Displaying all ${count} customer orders on screen.`;
       } else {
-        spoken = `Displaying ${count} orders on screen.`;
+        spoken = `Showing ${count} ${label} customer orders on screen.`;
       }
 
       return {
