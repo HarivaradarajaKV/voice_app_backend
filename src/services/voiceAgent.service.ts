@@ -260,23 +260,56 @@ export class VoiceAgentService {
       timestamp: new Date(),
     });
 
-    const lower = transcript.toLowerCase().trim().replace(/[.,!?;:]/g, '');
+    let lower = transcript.toLowerCase().trim().replace(/[.,!?;:]/g, '');
 
-    // 0. Check for Direct Wake-Word / Greeting ("Hey maitreD", "Hi maitreD", "Hello maitreD")
+    // 0. Normalize wake words and strip leading call prefixes (e.g. "Hey Sarvam, customer orders open maadi" -> "customer orders open maadi")
+    const wakePrefixPattern = /^(?:hey|hi|hello|ok|okay|ey)?\s*(?:sarvam|sarvam\s*ai|maitred|maitre\s*d|maitre)\s*[,:\-]?\s*/i;
+    let cleanUtterance = lower;
+    if (wakePrefixPattern.test(cleanUtterance)) {
+      const stripped = cleanUtterance.replace(wakePrefixPattern, '').trim();
+      if (stripped.length > 0) {
+        cleanUtterance = stripped;
+        lower = stripped;
+      }
+    }
+
+    // 0.1 Check for Pure Wake-Word / Greeting ("Hi", "Hello", "Hey Sarvam", "Hi Sarvam", "Namaskara", "Namaste")
     if (
+      lower === 'hi' ||
+      lower === 'hello' ||
+      lower === 'hey' ||
+      lower === 'hey sarvam' ||
+      lower === 'hi sarvam' ||
+      lower === 'hello sarvam' ||
+      lower === 'sarvam' ||
+      lower === 'sarvam ai' ||
+      lower === 'namaskara' ||
+      lower === 'namaste' ||
+      lower === 'vanakkam' ||
+      lower === 'namaskaram' ||
       lower === 'hey maitred' ||
       lower === 'hi maitred' ||
       lower === 'hello maitred' ||
-      lower === 'hey maître d' ||
-      lower === 'hi maître d' ||
-      lower === 'hello maître d' ||
       lower === 'maitred' ||
-      lower === 'maitre d' ||
-      lower === 'metre d' ||
-      lower === 'meter d' ||
-      lower === 'mayter d'
+      lower === 'maitre d'
     ) {
-      const greeting = `Hi ${adminName}, how may I help you today?`;
+      let greeting = '';
+      if (language === 'kannada_english') {
+        greeting = 'Namaskara! Naanu nimma Sarvam AI voice assistant. Enu maadbeku heli?';
+      } else if (language === 'hindi_english') {
+        greeting = 'Namaste! Main aapka Sarvam AI voice assistant hoon. Main aapki kya madad kar sakta hoon?';
+      } else if (language === 'tamil_english') {
+        greeting = 'Vanakkam! Naan ungal Sarvam AI voice assistant. Enna seiyanum sollunga?';
+      } else if (language === 'telugu_english') {
+        greeting = 'Namaskaram! Nenu mee Sarvam AI voice assistant. Nenu meeku ela sahayapadagalanu?';
+      } else if (language === 'malayalam_english') {
+        greeting = 'Namaskaram! Njan ningalude Sarvam AI voice assistant aanu. Enthanu cheyyendathu?';
+      } else {
+        greeting = adminName
+          ? `Hello ${adminName}! I am your Sarvam AI voice assistant. What would you like to do?`
+          : "Hello! I am your Sarvam AI voice assistant. How can I help with your restaurant operations today?";
+      }
+
       return {
         spokenResponse: greeting,
         displayTranscript: transcript,
@@ -287,25 +320,25 @@ export class VoiceAgentService {
       };
     }
 
-    // 0.1 Check for Polite Closing ("Thank you", "Thanks maitreD", "That's all", "Goodbye")
+    // 0.2 Check for Polite Closing ("Thank you", "Thanks", "That's all", "Goodbye")
     if (
       lower === 'thank you' ||
       lower === 'thanks' ||
+      lower === 'thanks sarvam' ||
+      lower === 'thank you sarvam' ||
       lower === 'thanks maitred' ||
       lower === 'thank you maitred' ||
       lower === "that's all" ||
       lower === 'thats all' ||
       lower === "that's it" ||
       lower === 'thats it' ||
-      lower === 'goodbye maitred' ||
-      lower === 'done for now' ||
-      lower === 'okay thats all' ||
-      lower === 'swalpa thanks' ||
+      lower === 'goodbye' ||
+      lower === 'goodbye sarvam' ||
       lower === 'dhanyavada' ||
       lower === 'shukriya' ||
       lower === 'nandri'
     ) {
-      const closingMsg = `You're welcome, ${adminName}. Have a great day.`;
+      const closingMsg = `You're welcome! Let me know whenever you need anything.`;
       return {
         spokenResponse: closingMsg,
         displayTranscript: transcript,
