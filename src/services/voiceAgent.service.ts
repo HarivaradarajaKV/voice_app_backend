@@ -398,10 +398,24 @@ export class VoiceAgentService {
     if (actionClass === 'NAVIGATION') {
       const navTarget = this.resolveNavigationRoute(lower);
       let reply = '';
-      if (navTarget.route === '/operations/orders') {
+      if (navTarget.filterStatus) {
+        const readable =
+          navTarget.filterStatus === 'READY'
+            ? 'Ready to Serve'
+            : navTarget.filterStatus === 'NEW'
+            ? 'Pending'
+            : navTarget.filterStatus === 'ACCEPTED'
+            ? 'Accepted'
+            : navTarget.filterStatus === 'PREPARING'
+            ? 'Preparing'
+            : navTarget.filterStatus === 'COMPLETED'
+            ? 'Completed'
+            : navTarget.filterStatus;
+        reply = `Showing ${readable} orders in Customer Orders.`;
+      } else if (navTarget.route === '/operations/orders') {
         reply = language === 'kannada_english'
           ? `Sure, customer orders ge hogtini.`
-          : `Sure, I'm taking you to customer orders.`;
+          : `Sure, I'm taking you to Customer Orders.`;
       } else if (navTarget.route === '/operations/kds') {
         reply = language === 'kannada_english'
           ? `Sure, kitchen ge hogtini.`
@@ -421,7 +435,10 @@ export class VoiceAgentService {
         actionClass: 'NAVIGATION',
         detectedLanguage: language,
         confirmationRequired: false,
-        uiNavigation: { route: navTarget.route },
+        uiNavigation: {
+          route: navTarget.route,
+          filter: navTarget.filterStatus ? { status: navTarget.filterStatus } : undefined,
+        },
         sessionState: { branchId: session.branchId },
       };
     }
@@ -608,9 +625,9 @@ private static async planAndExecuteAgenticWorkflow(
     };
 
     const numMatch =
-      normalizedUtterance.match(/(?:kds|ord|audit|kot)?-?(\d{3,8})/i) ||
-      normalizedUtterance.match(/\b([a-zA-Z0-9]+-[0-9a-zA-Z]+)\b/i) ||
-      normalizedUtterance.match(/#(\d+)/i);
+      normalizedUtterance.match(/\b(?:kds|ord|audit|kot)-(\d{3,8})\b/i) ||
+      normalizedUtterance.match(/\border\s*#?\s*(\d{3,8})\b/i) ||
+      normalizedUtterance.match(/#(\d{3,8})\b/i);
     const queryNum = numMatch ? (numMatch[1] || numMatch[0]).replace(/^(order|kot|#)\s*/i, '').trim() : null;
 
     // 1. INTENT: VIEW_ORDER_STATUS (e.g. "What is the status of KDS-775955?", "Show the status of KDS-775955")
@@ -654,22 +671,22 @@ private static async planAndExecuteAgenticWorkflow(
     // 2. INTENT: UPDATE_ORDER_STATUS & REVERT
     // (e.g. "Change order KDS-775955 from Ready to Accepted", "Mark KDS-775955 ready", "Undo that", "Revert that")
     const isStatusMutation =
-      normalizedUtterance.includes('change') ||
-      normalizedUtterance.includes('mark') ||
-      normalizedUtterance.includes('shift') ||
-      normalizedUtterance.includes('move') ||
-      normalizedUtterance.includes('set') ||
-      normalizedUtterance.includes('kar do') ||
-      normalizedUtterance.includes('maadu') ||
-      normalizedUtterance.includes('pannunga') ||
-      normalizedUtterance.includes('cheyyi') ||
-      normalizedUtterance.includes('undo') ||
-      normalizedUtterance.includes('revert') ||
-      normalizedUtterance.includes('back to') ||
-      normalizedUtterance.includes('accept') ||
-      normalizedUtterance.includes('ready') ||
-      normalizedUtterance.includes('serve') ||
-      normalizedUtterance.includes('complete');
+      (normalizedUtterance.includes('change') ||
+        normalizedUtterance.includes('mark') ||
+        normalizedUtterance.includes('shift') ||
+        normalizedUtterance.includes('move') ||
+        normalizedUtterance.includes('set') ||
+        normalizedUtterance.includes('kar do') ||
+        normalizedUtterance.includes('undo') ||
+        normalizedUtterance.includes('revert') ||
+        normalizedUtterance.includes('back to') ||
+        (normalizedUtterance.includes('accept') && !normalizedUtterance.includes('show') && !normalizedUtterance.includes('accepted')) ||
+        (normalizedUtterance.includes('ready') && !normalizedUtterance.includes('show') && !normalizedUtterance.includes('ready to serve') && !normalizedUtterance.includes('section')) ||
+        (normalizedUtterance.includes('complete') && !normalizedUtterance.includes('show') && !normalizedUtterance.includes('completed'))) &&
+      !normalizedUtterance.includes('open') &&
+      !normalizedUtterance.includes('hogu') &&
+      !normalizedUtterance.includes('navigate') &&
+      !normalizedUtterance.includes('take me');
 
     if (isStatusMutation && !normalizedUtterance.includes('show') && !normalizedUtterance.includes('list') && !normalizedUtterance.includes('view') && !normalizedUtterance.includes('display')) {
       // Revert / Undo command
@@ -1844,37 +1861,105 @@ private static async planAndExecuteAgenticWorkflow(
   }
 
   /**
-   * Navigation Target Resolver
+   * CANONICAL ROUTE REGISTRY
    */
-  private static resolveNavigationRoute(text: string): { route: string; name: string } {
-    if (text.includes('inventory') || text.includes('stock')) {
-      return { route: '/operations/inventory', name: 'inventory' };
+  public static readonly CANONICAL_ROUTES = {
+    dashboard: { route: '/', name: 'Dashboard' },
+    customerOrders: { route: '/operations/orders', name: 'Customer Orders' },
+    kitchen: { route: '/operations/kds', name: 'Kitchen Display' },
+    inventory: { route: '/operations/inventory', name: 'Inventory Master' },
+    consumption: { route: '/operations/consumption', name: 'Consumption Log' },
+    waste: { route: '/operations/waste', name: 'Waste & Spoilage' },
+    menuItems: { route: '/menu/items', name: 'Menu Items' },
+    recipes: { route: '/menu/recipes', name: 'Recipe & BOM Studio' },
+    procurementIntelligence: { route: '/procurement/intelligence', name: 'Purchase Intelligence' },
+    purchaseOrders: { route: '/procurement/purchase-orders', name: 'Purchase Orders' },
+    suppliers: { route: '/procurement/suppliers', name: 'Supplier Directory' },
+    dailyReport: { route: '/reports/daily', name: 'Daily Reports' },
+    analytics: { route: '/analytics', name: 'Analytics' },
+  };
+
+  /**
+   * Navigation Target & Section Filter Resolver
+   */
+  private static resolveNavigationRoute(text: string): { route: string; name: string; filterStatus?: string } {
+    const lower = text.toLowerCase();
+
+    // 1. Order Sub-Sections & Views (e.g. "Ready to Serve in Customer Orders", "Pending section", "Accepted orders")
+    if (lower.includes('ready to serve') || (lower.includes('ready') && (lower.includes('section') || lower.includes('tab') || lower.includes('view') || lower.includes('order')))) {
+      return { route: this.CANONICAL_ROUTES.customerOrders.route, name: 'Customer Orders', filterStatus: 'READY' };
     }
-    if (text.includes('kitchen') || text.includes('kds')) {
-      return { route: '/operations/kds', name: 'kitchen department' };
+    if (lower.includes('pending') || lower.includes('hosadu') || (lower.includes('new') && (lower.includes('order') || lower.includes('section') || lower.includes('tab')))) {
+      return { route: this.CANONICAL_ROUTES.customerOrders.route, name: 'Customer Orders', filterStatus: 'NEW' };
     }
-    if (text.includes('order')) {
-      return { route: '/operations/orders', name: 'orders' };
+    if (lower.includes('accepted') && (lower.includes('section') || lower.includes('tab') || lower.includes('view') || lower.includes('order'))) {
+      return { route: this.CANONICAL_ROUTES.customerOrders.route, name: 'Customer Orders', filterStatus: 'ACCEPTED' };
     }
-    if (text.includes('procurement') || text.includes('purchase')) {
-      return { route: '/procurement/purchase-orders', name: 'purchase orders' };
+    if (lower.includes('preparing') && (lower.includes('section') || lower.includes('tab') || lower.includes('view') || lower.includes('order'))) {
+      return { route: this.CANONICAL_ROUTES.customerOrders.route, name: 'Customer Orders', filterStatus: 'PREPARING' };
     }
-    if (text.includes('supplier')) {
-      return { route: '/procurement/suppliers', name: 'suppliers' };
+    if (lower.includes('completed') && (lower.includes('section') || lower.includes('tab') || lower.includes('view') || lower.includes('order'))) {
+      return { route: this.CANONICAL_ROUTES.customerOrders.route, name: 'Customer Orders', filterStatus: 'COMPLETED' };
     }
-    if (text.includes('daily report') || text.includes("today's report") || text.includes('eod') || text.includes('todays report')) {
-      return { route: '/reports/daily', name: 'daily reports' };
+    if (lower.includes('cancelled') && (lower.includes('section') || lower.includes('tab') || lower.includes('view') || lower.includes('order'))) {
+      return { route: this.CANONICAL_ROUTES.customerOrders.route, name: 'Customer Orders', filterStatus: 'CANCELLED' };
     }
-    if (text.includes('analytics') || text.includes('report')) {
-      return { route: '/analytics', name: 'analytics' };
+
+    // 2. Customer Orders Base Page
+    if (
+      lower.includes('customer order') ||
+      lower.includes('customer orders') ||
+      lower.includes('orders page') ||
+      lower.includes('orders screen') ||
+      lower.includes('open orders') ||
+      lower.includes('show orders') ||
+      lower.includes('view orders') ||
+      (lower.includes('order') && !lower.includes('purchase order'))
+    ) {
+      return { route: this.CANONICAL_ROUTES.customerOrders.route, name: 'Customer Orders' };
     }
-    if (text.includes('recipe') || text.includes('menu')) {
-      return { route: '/menu/recipes', name: 'recipes' };
+
+    // 3. Kitchen Display (KDS)
+    if (lower.includes('kitchen') || lower.includes('kds display') || lower.includes('cook station') || (lower.includes('kds') && !lower.includes('kds-'))) {
+      return { route: this.CANONICAL_ROUTES.kitchen.route, name: 'Kitchen Display' };
     }
-    if (text.includes('waste')) {
-      return { route: '/operations/waste', name: 'waste log' };
+
+    // 4. Inventory Master
+    if (lower.includes('inventory') || lower.includes('stock master') || lower.includes('ingredient stock')) {
+      return { route: this.CANONICAL_ROUTES.inventory.route, name: 'Inventory Master' };
     }
-    return { route: '/operations/inventory', name: 'inventory' };
+
+    // 5. Daily Reports & Sales
+    if (lower.includes('daily report') || lower.includes('sales report') || lower.includes('today sales') || lower.includes('todays sales') || lower.includes("today's sales") || lower.includes('eod')) {
+      return { route: this.CANONICAL_ROUTES.dailyReport.route, name: 'Daily Reports' };
+    }
+    if (lower.includes('analytics') || lower.includes('revenue chart') || lower.includes('overview')) {
+      return { route: this.CANONICAL_ROUTES.analytics.route, name: 'Analytics' };
+    }
+
+    // 6. Procurement & Purchase Orders
+    if (lower.includes('purchase order') || lower.includes('procurement') || lower.includes('po')) {
+      return { route: this.CANONICAL_ROUTES.purchaseOrders.route, name: 'Purchase Orders' };
+    }
+    if (lower.includes('supplier') || lower.includes('vendor')) {
+      return { route: this.CANONICAL_ROUTES.suppliers.route, name: 'Supplier Directory' };
+    }
+
+    // 7. Menu & Recipes
+    if (lower.includes('recipe') || lower.includes('bom')) {
+      return { route: this.CANONICAL_ROUTES.recipes.route, name: 'Recipe & BOM Studio' };
+    }
+    if (lower.includes('menu item') || lower.includes('dish master') || lower.includes('menu')) {
+      return { route: this.CANONICAL_ROUTES.menuItems.route, name: 'Menu Items' };
+    }
+
+    // 8. Waste & Spoilage
+    if (lower.includes('waste') || lower.includes('spoilage')) {
+      return { route: this.CANONICAL_ROUTES.waste.route, name: 'Waste & Spoilage' };
+    }
+
+    // Default fallback to Dashboard
+    return { route: this.CANONICAL_ROUTES.dashboard.route, name: 'Dashboard' };
   }
 
   /**
