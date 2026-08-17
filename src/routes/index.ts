@@ -144,7 +144,15 @@ router.post('/voice/vapi-webhook', async (req, res) => {
                 : toolCall.function.arguments)
             : (toolCall.parameters ?? toolCall.arguments ?? {});
 
-          const transcript: string = params.transcript || '';
+          const transcript: string =
+            params.transcript ||
+            params.text ||
+            params.command ||
+            params.query ||
+            params.instruction ||
+            params.input ||
+            params.speech ||
+            '';
           const sessionId: string = params.sessionId || `vapi_${Date.now()}`;
           const userId = `vapi_${sessionId}`;
 
@@ -181,7 +189,20 @@ router.post('/voice/vapi-webhook', async (req, res) => {
     }
 
     // Direct apiRequest payload format: { transcript: "..." }
-    const transcript: string = body.transcript || body.text || '';
+    const transcript: string =
+      body.transcript ||
+      body.text ||
+      body.command ||
+      body.query ||
+      body.instruction ||
+      body.body?.transcript ||
+      body.body?.text ||
+      body.parameters?.transcript ||
+      body.parameters?.text ||
+      body.arguments?.transcript ||
+      message?.transcript ||
+      message?.parameters?.transcript ||
+      '';
     const sessionId = body.sessionId || `vapi_${Date.now()}`;
     const userId = `vapi_${sessionId}`;
 
