@@ -159,25 +159,27 @@ export class VoiceAgentService {
     if (/[\u0B00-\u0B7F]/.test(text)) return 'odia';
     if (/[\u0600-\u06FF]/.test(text)) return 'urdu';
 
-    // Romanized Indic Code-Switching
+    // Romanized Indic Code-Switching & Keywords
     if (
       lower.includes('maadi') ||
+      lower.includes('madi') ||
       lower.includes('maadu') ||
+      lower.includes('madli') ||
       lower.includes('yestu') ||
       lower.includes('hogu') ||
       lower.includes('hogona') ||
       lower.includes('nodona') ||
+      lower.includes('nodthini') ||
       lower.includes('ide') ||
       lower.includes('aagide') ||
-      lower.includes('bana') ||
       lower.includes('swalpa') ||
       lower.includes('beku') ||
-      lower.includes('kodi') ||
-      lower.includes('illi') ||
-      lower.includes('alli') ||
-      lower.includes('haudu') ||
       lower.includes('beda') ||
-      lower.includes('ee order')
+      lower.includes('kodi') ||
+      lower.includes('haudu') ||
+      lower.includes('namaskara') ||
+      lower.includes('hegiddira') ||
+      lower.includes('thogo')
     ) {
       return 'kannada_english';
     }
@@ -185,43 +187,85 @@ export class VoiceAgentService {
     if (
       lower.includes('karo') ||
       lower.includes('karein') ||
-      lower.includes('bhejo') ||
-      lower.includes('kitna') ||
+      lower.includes('kholo') ||
+      lower.includes('kholiye') ||
+      lower.includes('dikhao') ||
+      lower.includes('dikhayein') ||
       lower.includes('batao') ||
+      lower.includes('kitna') ||
       lower.includes('hai') ||
+      lower.includes('hain') ||
       lower.includes('chahiye') ||
       lower.includes('de do') ||
-      lower.includes('dikhayein') ||
       lower.includes('haan') ||
       lower.includes('nahi') ||
-      lower.includes('is order')
+      lower.includes('kar do') ||
+      lower.includes('badlo') ||
+      lower.includes('namaste') ||
+      lower.includes('shukriya') ||
+      lower.includes('kaisa hai')
     ) {
       return 'hindi_english';
     }
 
     if (
       lower.includes('pannunga') ||
-      lower.includes('evvalavu') ||
       lower.includes('kaatunga') ||
       lower.includes('ponga') ||
       lower.includes('irukku') ||
       lower.includes('aama') ||
       lower.includes('vendaam') ||
-      lower.includes('inda order')
+      lower.includes('evvalavu') ||
+      lower.includes('vanakkam') ||
+      lower.includes('nandri') ||
+      lower.includes('sollunga') ||
+      lower.includes('seiyunga') ||
+      lower.includes('matru')
     ) {
       return 'tamil_english';
     }
 
     if (
+      lower.includes('cheyyandi') ||
       lower.includes('cheyandi') ||
-      lower.includes('entha') ||
+      lower.includes('chupinchandi') ||
+      lower.includes('vellandi') ||
       lower.includes('vellu') ||
       lower.includes('undi') ||
       lower.includes('avunu') ||
       lower.includes('vaddu') ||
-      lower.includes('ee order')
+      lower.includes('entha') ||
+      lower.includes('namaskaram') ||
+      lower.includes('dhanyavadalu') ||
+      lower.includes('marchandi')
     ) {
       return 'telugu_english';
+    }
+
+    if (
+      lower.includes('thurakku') ||
+      lower.includes('kaanikku') ||
+      lower.includes('cheyyu') ||
+      lower.includes('und') ||
+      lower.includes('alla') ||
+      lower.includes('athe') ||
+      lower.includes('nandi') ||
+      lower.includes('ethra') ||
+      lower.includes('maattu') ||
+      lower.includes('poku')
+    ) {
+      return 'malayalam_english';
+    }
+
+    if (
+      lower.includes('kara') ||
+      lower.includes('dakva') ||
+      lower.includes('kiti') ||
+      lower.includes('aahe') ||
+      lower.includes('dya') ||
+      lower.includes('namaskar')
+    ) {
+      return 'marathi_english';
     }
 
     return 'english';
@@ -445,18 +489,16 @@ export class VoiceAgentService {
             ? 'Completed'
             : navTarget.filterStatus;
         reply = `Showing ${readable} orders in Customer Orders.`;
-      } else if (navTarget.route === '/operations/orders') {
-        reply = language === 'kannada_english'
-          ? `Sure, customer orders ge hogtini.`
-          : `Sure, I'm taking you to Customer Orders.`;
-      } else if (navTarget.route === '/operations/kds') {
-        reply = language === 'kannada_english'
-          ? `Sure, kitchen ge hogtini.`
-          : `Sure, I'm taking you to the kitchen.`;
       } else if (language === 'kannada_english') {
         reply = `Sure, ${navTarget.name} ge hogtini.`;
       } else if (language === 'hindi_english') {
         reply = `Theek hai, ${navTarget.name} section open kar raha hoon.`;
+      } else if (language === 'tamil_english') {
+        reply = `Sari, ${navTarget.name} section-ku pogiren.`;
+      } else if (language === 'telugu_english') {
+        reply = `Sare, ${navTarget.name} section-ki velthunnanu.`;
+      } else if (language === 'malayalam_english') {
+        reply = `Sheri, ${navTarget.name} section-ilekku pokunnu.`;
       } else {
         reply = `Sure, I'm taking you to ${navTarget.name}.`;
       }
@@ -865,20 +907,45 @@ private static async planAndExecuteAgenticWorkflow(
       };
 
       let spoken = '';
+      const readable =
+        targetStatus === 'READY'
+          ? 'Ready'
+          : targetStatus === 'ACCEPTED'
+          ? 'Accepted'
+          : targetStatus === 'PREPARING'
+          ? 'Preparing'
+          : targetStatus === 'COMPLETED'
+          ? 'Completed'
+          : targetStatus;
+
       if (isRevert) {
-        spoken = `Done. Order #${updated.orderNumber} status has been reverted back to ${targetStatus}.`;
+        if (language === 'kannada_english') {
+          spoken = `Aayithu. Order #${updated.orderNumber} status ${targetStatus} ge revert aagide.`;
+        } else if (language === 'hindi_english') {
+          spoken = `Order #${updated.orderNumber} ka status wapas ${targetStatus} kar diya gaya hai.`;
+        } else if (language === 'tamil_english') {
+          spoken = `Order #${updated.orderNumber} status ${targetStatus}-ku thirumba maatriyullathu.`;
+        } else if (language === 'telugu_english') {
+          spoken = `Order #${updated.orderNumber} status malli ${targetStatus}-ga marchabadindi.`;
+        } else if (language === 'malayalam_english') {
+          spoken = `Order #${updated.orderNumber} status thirike ${targetStatus} aayi maatti.`;
+        } else {
+          spoken = `Done. Order #${updated.orderNumber} status has been reverted back to ${targetStatus}.`;
+        }
       } else {
-        const readable =
-          targetStatus === 'READY'
-            ? 'Ready'
-            : targetStatus === 'ACCEPTED'
-            ? 'Accepted'
-            : targetStatus === 'PREPARING'
-            ? 'Preparing'
-            : targetStatus === 'COMPLETED'
-            ? 'Completed'
-            : targetStatus;
-        spoken = `Done. Order #${updated.orderNumber} is now ${readable}.`;
+        if (language === 'kannada_english') {
+          spoken = `Aayithu. Order #${updated.orderNumber} ${readable} aagi change aagide.`;
+        } else if (language === 'hindi_english') {
+          spoken = `Order #${updated.orderNumber} ab ${readable} ho gaya hai.`;
+        } else if (language === 'tamil_english') {
+          spoken = `Order #${updated.orderNumber} ippo ${readable} aaga maatriyullathu.`;
+        } else if (language === 'telugu_english') {
+          spoken = `Order #${updated.orderNumber} ippudu ${readable}-ga marchabadindi.`;
+        } else if (language === 'malayalam_english') {
+          spoken = `Order #${updated.orderNumber} ippol ${readable} aayi.`;
+        } else {
+          spoken = `Done. Order #${updated.orderNumber} is now ${readable}.`;
+        }
       }
 
       return {
