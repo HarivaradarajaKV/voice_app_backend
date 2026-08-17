@@ -12,10 +12,19 @@ export class AuditService {
     ipAddress?: string;
   }) {
     try {
+      let validUserId = params.userId;
+      if (validUserId) {
+        const userExists = await prisma.user.findUnique({ where: { id: validUserId } });
+        if (!userExists) {
+          const fallbackUser = await prisma.user.findFirst();
+          validUserId = fallbackUser?.id;
+        }
+      }
+
       return await prisma.auditLog.create({
         data: {
           branchId: params.branchId,
-          userId: params.userId,
+          userId: validUserId,
           action: params.action,
           entity: params.entity,
           entityId: params.entityId,

@@ -577,6 +577,7 @@ private static async planAndExecuteAgenticWorkflow(
     };
 
     const normalizedUtterance = normalizeSpokenNumbers(text);
+    const activeBranchId = session.branchId;
 
     // =========================================================================
     // COMPLETE INTENT PARSER & EXECUTOR
@@ -760,9 +761,20 @@ private static async planAndExecuteAgenticWorkflow(
         },
       });
 
+      const targetKitchenStatus: 'NEW' | 'PREPARING' | 'READY' | 'SERVED' | 'CANCELLED' =
+        targetStatus === 'READY'
+          ? 'READY'
+          : targetStatus === 'COMPLETED'
+          ? 'SERVED'
+          : targetStatus === 'CANCELLED'
+          ? 'CANCELLED'
+          : targetStatus === 'PREPARING'
+          ? 'PREPARING'
+          : 'NEW';
+
       await prisma.orderItem.updateMany({
         where: { orderId: order.id },
-        data: { itemStatus: targetStatus as any },
+        data: { itemStatus: targetKitchenStatus as any },
       });
 
       await AuditService.log({
@@ -813,86 +825,6 @@ private static async planAndExecuteAgenticWorkflow(
         detectedLanguage: language,
         confirmationRequired: false,
         actionResult: updated,
-        sessionState: { branchId: activeBranchId, activeEntity: session.currentEntity },
-      };
-    }
-
-      if (session.userRole === RoleType.SUPPLIER) {
-        return {
-          spokenResponse: 'You do not have permission to accept customer orders.',
-          displayTranscript: rawTranscript,
-          actionClass: 'ACTION',
-          detectedLanguage: language,
-          confirmationRequired: false,
-          sessionState: { branchId: activeBranchId },
-        };
-      }
-
-      const previousStatus = order.orderStatus;
-
-      // ATOMIC TRANSACTION: BOM Deductions + Status Update
-      if (order.orderStatus === 'NEW') {
-        await InventoryEngineService.deductStockForOrder(order.id, session.userId);
-      }
-
-      const updated = await prisma.order.update({
-        where: { id: order.id },
-        data: {
-          orderStatus: 'ACCEPTED',
-          acceptedAt: new Date(),
-        },
-        include: { items: { include: { menuItem: true } } },
-      });
-
-      await AuditService.log({
-        branchId: activeBranchId,
-        userId: session.userId,
-        action: 'ORDER_STATUS_CHANGED',
-        entity: 'Order',
-        entityId: order.id,
-        previousValue: previousStatus,
-        newValue: 'ACCEPTED',
-        ipAddress: 'voice-agent',
-      });
-
-      const verified = await prisma.order.findUnique({ where: { id: order.id } });
-
-      session.currentEntity = {
-        type: 'order',
-        id: updated.id,
-        name: `Order #${updated.orderNumber}`,
-        data: updated,
-      };
-
-      session.lastOrderAction = {
-        orderId: updated.id,
-        orderNumber: updated.orderNumber,
-        previousStatus,
-        newStatus: 'ACCEPTED',
-        timestamp: Date.now(),
-      };
-
-      let spoken = '';
-      if (language === 'kannada_english') {
-        spoken = `Done. Order #${updated.orderNumber} accept aagide.`;
-      } else if (language === 'hindi_english') {
-        spoken = `Theek hai. Order #${updated.orderNumber} accept ho gaya hai.`;
-      } else {
-        spoken = `Done. Order #${updated.orderNumber} has been accepted.`;
-      }
-
-      return {
-        spokenResponse: spoken,
-        displayTranscript: rawTranscript,
-        actionClass: 'ACTION',
-        detectedLanguage: language,
-        confirmationRequired: false,
-        actionResult: verified,
-        uiNavigation: {
-          route: '/operations/orders',
-          highlightId: updated.id,
-          openModal: 'orderDetails',
-        },
         sessionState: { branchId: activeBranchId, activeEntity: session.currentEntity },
       };
     }
