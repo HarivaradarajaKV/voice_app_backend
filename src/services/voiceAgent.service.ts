@@ -551,26 +551,26 @@ private static async planAndExecuteAgenticWorkflow(
 
     // Helper: Find exact target order matching spoken utterance
     const findTargetOrder = async (orderStatusFilter?: string[]): Promise<any | null> => {
-      // 1. Direct regex for order numbers: KDS-775955, ORD-1234, 775955, #1234, 775955, etc.
-      const patterns = [
-        /\b(?:order|kot|kds|ord|#)\s*([a-zA-Z0-9_-]+)\b/i,
-        /\b([a-zA-Z0-9]+-[0-9a-zA-Z]+)\b/i,
-        /\b(\d{3,8})\b/i,
-      ];
+      // 1. Direct regex for order numbers: KDS-573058, ORD-1234, 573058, #775955, etc.
+      const numMatch =
+        text.match(/(?:kds|ord|audit|kot)?-?(\d{4,8})/i) ||
+        text.match(/\b([a-zA-Z0-9]+-[a-zA-Z0-9]+)\b/i) ||
+        text.match(/#(\d+)/i) ||
+        text.match(/\border\s*#?(\d+)\b/i);
 
-      for (const pat of patterns) {
-        const match = text.match(pat);
-        if (match && match[1]) {
-          const queryNum = match[1].trim();
-          if (queryNum.length >= 2 && (isNaN(Number(queryNum)) || Number(queryNum) > 10)) {
-            const found = await prisma.order.findFirst({
-              where: {
-                branchId: activeBranchId,
-                orderNumber: { contains: queryNum, mode: 'insensitive' },
-              },
-              include: { items: { include: { menuItem: true } } },
-            });
-            if (found) return found;
+      if (numMatch && (numMatch[1] || numMatch[0])) {
+        const queryNum = (numMatch[1] || numMatch[0]).replace(/^(order|kot|#)\s*/i, '').trim();
+        if (queryNum.length >= 3) {
+          const found = await prisma.order.findFirst({
+            where: {
+              branchId: activeBranchId,
+              orderNumber: { contains: queryNum, mode: 'insensitive' },
+            },
+            include: { items: { include: { menuItem: true } } },
+          });
+          if (found) {
+            console.log(`[findTargetOrder] 🎯 Matched exact order: ${found.orderNumber} via query "${queryNum}"`);
+            return found;
           }
         }
       }
