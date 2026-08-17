@@ -499,12 +499,22 @@ export class VoiceAgentService {
 
     // Mutations & Status Actions
     if (
+      text.includes('mark') ||
+      text.includes('change') ||
+      text.includes('shift') ||
+      text.includes('move') ||
+      text.includes('set') ||
       text.includes('accept') ||
       text.includes('ready') ||
+      text.includes('preparing') ||
+      text.includes('cooking') ||
+      text.includes('complete') ||
+      text.includes('cancel') ||
       text.includes('serve') ||
       text.includes('revert') ||
       text.includes('undo') ||
       text.includes('move it back') ||
+      text.includes('back to') ||
       text.includes('add') ||
       text.includes('deduct') ||
       text.includes('create') ||
