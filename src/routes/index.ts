@@ -107,55 +107,47 @@ router.put('/admin/notifications/:id/read', authenticateJWT, AdminController.mar
 // 13. Voice Action Agent Routes
 router.post('/voice/action', authenticateJWT, VoiceController.handleVoiceAction);
 router.post('/voice/confirm', authenticateJWT, VoiceController.confirmPendingAction);
-// 14. VAPI Tool-Call Webhook (no JWT — VAPI calls this from their servers)
+// 14. VAPI Tool-Call Webhook (handles both direct apiRequest & wrapped tool-calls payloads)
 import { VoiceAgentService } from '../services/voiceAgent.service';
 router.post('/voice/vapi-webhook', async (req, res) => {
   try {
-    const body = req.body;
+    const body = req.body || {};
 
-    // VAPI sends tool calls wrapped in a "message" object
-    const message = body?.message ?? body;
-    if (!message || message.type !== 'tool-calls') {
-      // Not a tool-call — return empty to satisfy VAPI
-      return res.json({ results: [] });
+    // Determine if payload is direct apiRequest { transcript: "..." } or wrapped { message: { type: 'tool-calls', ... } }
+    const message = body.message || body;
+    const isToolCallsWrapped = message?.type === 'tool-calls' || Array.isArray(message?.toolCallList) || Array.isArray(message?.toolCalls);
+
+    // Get branch context
+    let branchId = body.branchId || message?.call?.metadata?.branchId || '';
+    if (!branchId) {
+      const firstBranch = await prisma.branch.findFirst();
+      branchId = firstBranch?.id || '';
     }
 
-    const toolCallList: any[] = message.toolCallList ?? message.toolCalls ?? [];
-    if (toolCallList.length === 0) {
-      return res.json({ results: [] });
-    }
+    const userName = body.userName || message?.call?.metadata?.userName || 'Kishore Hegde';
+    const currentRoute = body.currentRoute || message?.call?.metadata?.currentRoute || '/';
+    const userRole = 'MANAGER' as any;
 
-    const results = await Promise.all(
-      toolCallList.map(async (toolCall: any) => {
-        const fnName: string = toolCall.function?.name ?? toolCall.name ?? '';
-        const params: any = toolCall.function?.arguments
-          ? (typeof toolCall.function.arguments === 'string'
-              ? JSON.parse(toolCall.function.arguments)
-              : toolCall.function.arguments)
-          : (toolCall.parameters ?? toolCall.arguments ?? {});
+    if (isToolCallsWrapped) {
+      const toolCallList: any[] = message.toolCallList ?? message.toolCalls ?? [];
+      if (toolCallList.length === 0) {
+        return res.json({ results: [] });
+      }
 
-        if (fnName === 'execute_voice_command') {
-          const transcript: string = params.transcript ?? '';
-          const sessionId: string = params.sessionId ?? `vapi_${Date.now()}`;
-          const currentRoute: string = params.currentRoute ?? '/';
-          // Metadata passed when starting the call
-          const callMeta = message.call?.metadata ?? {};
-          let branchId: string = callMeta.branchId ?? params.branchId ?? '';
-          const userName: string = callMeta.userName ?? params.userName ?? 'Kishore Hegde';
+      const results = await Promise.all(
+        toolCallList.map(async (toolCall: any) => {
+          const fnName: string = toolCall.function?.name ?? toolCall.name ?? '';
+          const params: any = toolCall.function?.arguments
+            ? (typeof toolCall.function.arguments === 'string'
+                ? JSON.parse(toolCall.function.arguments)
+                : toolCall.function.arguments)
+            : (toolCall.parameters ?? toolCall.arguments ?? {});
 
-          if (!branchId) {
-            const firstBranch = await prisma.branch.findFirst();
-            branchId = firstBranch?.id ?? '';
-          }
-
-          // Default role — VAPI calls are from authenticated restaurant staff
+          const transcript: string = params.transcript || '';
+          const sessionId: string = params.sessionId || `vapi_${Date.now()}`;
           const userId = `vapi_${sessionId}`;
-          const userRole = 'MANAGER' as any;
 
-          let toolResult: any = {
-            spokenResponse: "I'm sorry, I couldn't process that.",
-          };
-
+          let toolResult: any = { spokenResponse: "I've processed your request." };
           try {
             const result = await VoiceAgentService.processConversationalTurn(
               transcript,
@@ -174,24 +166,61 @@ router.post('/voice/vapi-webhook', async (req, res) => {
               detectedLanguage: result.detectedLanguage,
             };
           } catch (err) {
-            console.error('[VAPI Webhook] VoiceAgentService error:', err);
+            console.error('[VAPI Webhook] Execution error:', err);
           }
 
           return {
             toolCallId: toolCall.id,
             result: JSON.stringify(toolResult),
           };
-        }
+        })
+      );
 
-        // Unknown tool — return empty
-        return { toolCallId: toolCall.id, result: JSON.stringify({ error: 'Unknown tool' }) };
-      })
+      return res.json({ results });
+    }
+
+    // Direct apiRequest payload format: { transcript: "..." }
+    const transcript: string = body.transcript || body.text || '';
+    const sessionId = body.sessionId || `vapi_${Date.now()}`;
+    const userId = `vapi_${sessionId}`;
+
+    const result = await VoiceAgentService.processConversationalTurn(
+      transcript,
+      sessionId,
+      userId,
+      userRole,
+      branchId,
+      currentRoute,
+      userName
     );
 
-    return res.json({ results });
+    const payload = {
+      spokenResponse: result.spokenResponse,
+      displayTranscript: result.displayTranscript,
+      actionClass: result.actionClass,
+      detectedLanguage: result.detectedLanguage,
+      confirmationRequired: result.confirmationRequired,
+      uiNavigation: result.uiNavigation,
+      actionResult: result.actionResult,
+      // Also provide results array for compatibility
+      results: [
+        {
+          result: JSON.stringify({
+            spokenResponse: result.spokenResponse,
+            uiNavigation: result.uiNavigation,
+            actionResult: result.actionResult,
+          }),
+        },
+      ],
+    };
+
+    return res.json(payload);
   } catch (error) {
     console.error('[VAPI Webhook] Unhandled error:', error);
-    return res.status(500).json({ error: 'Internal server error' });
+    return res.status(500).json({
+      spokenResponse: "I encountered an error connecting to the restaurant system.",
+      error: 'Internal server error',
+    });
   }
 });
 
