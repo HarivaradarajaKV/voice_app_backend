@@ -144,7 +144,7 @@ router.post('/voice/vapi-webhook', async (req, res) => {
                 : toolCall.function.arguments)
             : (toolCall.parameters ?? toolCall.arguments ?? {});
 
-          const transcript: string =
+          let transcript: string =
             params.transcript ||
             params.text ||
             params.command ||
@@ -153,6 +153,21 @@ router.post('/voice/vapi-webhook', async (req, res) => {
             params.input ||
             params.speech ||
             '';
+
+          if (!transcript) {
+            if (params.orderNumber && params.newStatus) {
+              transcript = `Change order ${params.orderNumber} to ${params.newStatus}`;
+            } else if (params.page) {
+              transcript = `Go to ${params.page}${params.section ? ' ' + params.section : ''}`;
+            } else if (params.status) {
+              transcript = `Show ${params.status} orders`;
+            } else if (params.item) {
+              transcript = `Check inventory for ${params.item}`;
+            } else if (params.period) {
+              transcript = `Show ${params.period} sales`;
+            }
+          }
+
           const sessionId: string = params.sessionId || `vapi_${Date.now()}`;
           const userId = `vapi_${sessionId}`;
 
@@ -189,7 +204,7 @@ router.post('/voice/vapi-webhook', async (req, res) => {
     }
 
     // Direct apiRequest payload format: { transcript: "..." }
-    const transcript: string =
+    let transcript: string =
       body.transcript ||
       body.text ||
       body.command ||
@@ -203,6 +218,21 @@ router.post('/voice/vapi-webhook', async (req, res) => {
       message?.transcript ||
       message?.parameters?.transcript ||
       '';
+
+    if (!transcript) {
+      const p = body.body || body.parameters || body;
+      if (p.orderNumber && p.newStatus) {
+        transcript = `Change order ${p.orderNumber} to ${p.newStatus}`;
+      } else if (p.page) {
+        transcript = `Go to ${p.page}${p.section ? ' ' + p.section : ''}`;
+      } else if (p.status) {
+        transcript = `Show ${p.status} orders`;
+      } else if (p.item) {
+        transcript = `Check inventory for ${p.item}`;
+      } else if (p.period) {
+        transcript = `Show ${p.period} sales`;
+      }
+    }
     const sessionId = body.sessionId || `vapi_${Date.now()}`;
     const userId = `vapi_${sessionId}`;
 
