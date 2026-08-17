@@ -8,7 +8,17 @@ import { errorHandler } from './middleware/errorHandler.middleware';
 const app = express();
 
 // Middlewares
-app.use(cors({ origin: config.corsOrigin, credentials: true }));
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // Allow any origin (localhost:5173, Vercel, Netlify, etc.) with credentials
+      callback(null, true);
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'bypass-tunnel-reminder'],
+  })
+);
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
