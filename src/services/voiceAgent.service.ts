@@ -547,16 +547,35 @@ private static async planAndExecuteAgenticWorkflow(
     language: string,
     rawTranscript: string
   ): Promise<VoiceExecutionResponse> {
-    const activeBranchId = session.branchId;
+    // Number & phonetic normalizer for spoken order IDs (handles "seven seven five", "k d s 775", "7 7 5")
+    const normalizeSpokenNumbers = (t: string): string => {
+      const wordMap: Record<string, string> = {
+        zero: '0', one: '1', two: '2', three: '3', four: '4',
+        five: '5', six: '6', seven: '7', eight: '8', nine: '9',
+        ondhu: '1', eradu: '2', mooru: '3', naalku: '4', aidhu: '5', aaru: '6', eelu: '7', entu: '8', ombattu: '9', hatthu: '10',
+        ek: '1', do: '2', teen: '3', char: '4', paanch: '5', chhah: '6', saat: '7', aath: '8', nau: '9', das: '10',
+        'k d s': 'kds', 'o r d': 'ord', 'k.d.s.': 'kds', 'k d s-': 'kds-'
+      };
+      let clean = t.toLowerCase();
+      for (const [w, d] of Object.entries(wordMap)) {
+        clean = clean.replace(new RegExp('\\b' + w + '\\b', 'g'), d);
+      }
+      for (let i = 0; i < 6; i++) {
+        clean = clean.replace(/(\d)\s+(\d)/g, '$1$2');
+      }
+      return clean;
+    };
+
+    const normalizedUtterance = normalizeSpokenNumbers(text);
 
     // Helper: Find exact target order matching spoken utterance
     const findTargetOrder = async (orderStatusFilter?: string[]): Promise<any | null> => {
       // 1. Direct regex for order numbers: KDS-573058, ORD-1234, 573058, #775955, etc.
       const numMatch =
-        text.match(/(?:kds|ord|audit|kot)?-?(\d{4,8})/i) ||
-        text.match(/\b([a-zA-Z0-9]+-[a-zA-Z0-9]+)\b/i) ||
-        text.match(/#(\d+)/i) ||
-        text.match(/\border\s*#?(\d+)\b/i);
+        normalizedUtterance.match(/(?:kds|ord|audit|kot)?-?(\d{3,8})/i) ||
+        normalizedUtterance.match(/\b([a-zA-Z0-9]+-[0-9a-zA-Z]+)\b/i) ||
+        normalizedUtterance.match(/#(\d+)/i) ||
+        normalizedUtterance.match(/\border\s*#?(\d+)\b/i);
 
       if (numMatch && (numMatch[1] || numMatch[0])) {
         const queryNum = (numMatch[1] || numMatch[0]).replace(/^(order|kot|#)\s*/i, '').trim();
@@ -571,12 +590,15 @@ private static async planAndExecuteAgenticWorkflow(
           if (found) {
             console.log(`[findTargetOrder] 🎯 Matched exact order: ${found.orderNumber} via query "${queryNum}"`);
             return found;
+          } else {
+            console.log(`[findTargetOrder] ⚠️ Specific order "${queryNum}" not found in branch.`);
+            return null;
           }
         }
       }
 
       // 2. Customer Name search: e.g. "for Rahul", "of Priya"
-      const custMatch = text.match(/(?:for|of|from|customer)\s+([a-zA-Z]+)/i);
+      const custMatch = normalizedUtterance.match(/(?:for|of|from|customer)\s+([a-zA-Z]+)/i);
       if (custMatch && custMatch[1]) {
         const name = custMatch[1].trim();
         const found = await prisma.order.findFirst({
@@ -588,10 +610,11 @@ private static async planAndExecuteAgenticWorkflow(
           include: { items: { include: { menuItem: true } } },
         });
         if (found) return found;
+        return null;
       }
 
       // 3. Table Number search: e.g. "Table 1", "T-01"
-      const tableMatch = text.match(/(?:table|t-?)\s*([0-9a-zA-Z]+)/i);
+      const tableMatch = normalizedUtterance.match(/(?:table|t-?)\s*([0-9a-zA-Z]+)/i);
       if (tableMatch && tableMatch[1]) {
         const table = tableMatch[1].trim();
         const found = await prisma.order.findFirst({
@@ -603,6 +626,7 @@ private static async planAndExecuteAgenticWorkflow(
           include: { items: { include: { menuItem: true } } },
         });
         if (found) return found;
+        return null;
       }
 
       // 4. Session memory / active order
@@ -622,15 +646,24 @@ private static async planAndExecuteAgenticWorkflow(
         if (found) return found;
       }
 
-      // 5. Fallback with optional status filter
-      return await prisma.order.findFirst({
-        where: {
-          branchId: activeBranchId,
-          ...(orderStatusFilter ? { orderStatus: { in: orderStatusFilter as any } } : {}),
-        },
-        orderBy: { createdAt: 'desc' },
-        include: { items: { include: { menuItem: true } } },
-      });
+      // 5. Only fallback if user generically referred to "this order", "first order", or "the order"
+      if (
+        normalizedUtterance.includes('this order') ||
+        normalizedUtterance.includes('first order') ||
+        normalizedUtterance.includes('the order') ||
+        normalizedUtterance.includes('ee order')
+      ) {
+        return await prisma.order.findFirst({
+          where: {
+            branchId: activeBranchId,
+            ...(orderStatusFilter ? { orderStatus: { in: orderStatusFilter as any } } : {}),
+          },
+          orderBy: { createdAt: 'desc' },
+          include: { items: { include: { menuItem: true } } },
+        });
+      }
+
+      return null;
     };
 
     // 1. STATUS REVERSAL & CONTEXTUAL UNDO (e.g. "Undo that", "Revert that", "Move order back to preparing", "Change it back")
@@ -729,8 +762,10 @@ private static async planAndExecuteAgenticWorkflow(
     ) {
       const order = await findTargetOrder(['PREPARING', 'ACCEPTED', 'NEW']);
       if (!order) {
+        const numMatch = normalizedUtterance.match(/(?:kds|ord|audit|kot)?-?(\d{3,8})/i) || normalizedUtterance.match(/#(\d+)/i);
+        const queryNum = numMatch ? (numMatch[1] || numMatch[0]) : null;
         return {
-          spokenResponse: 'No active order found to mark ready.',
+          spokenResponse: queryNum ? `Order #${queryNum} was not found.` : 'No matching active order found to mark ready.',
           displayTranscript: rawTranscript,
           actionClass: 'ACTION',
           detectedLanguage: language,
