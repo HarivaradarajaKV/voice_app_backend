@@ -140,12 +140,17 @@ router.post('/voice/vapi-webhook', async (req, res) => {
           const currentRoute: string = params.currentRoute ?? '/';
           // Metadata passed when starting the call
           const callMeta = message.call?.metadata ?? {};
-          const branchId: string = callMeta.branchId ?? params.branchId ?? '';
-          const userName: string = callMeta.userName ?? params.userName ?? 'Admin';
+          let branchId: string = callMeta.branchId ?? params.branchId ?? '';
+          const userName: string = callMeta.userName ?? params.userName ?? 'Kishore Hegde';
+
+          if (!branchId) {
+            const firstBranch = await prisma.branch.findFirst();
+            branchId = firstBranch?.id ?? '';
+          }
 
           // Default role — VAPI calls are from authenticated restaurant staff
           const userId = `vapi_${sessionId}`;
-          const userRole = 'BRANCH_MANAGER' as any;
+          const userRole = 'MANAGER' as any;
 
           let toolResult: any = {
             spokenResponse: "I'm sorry, I couldn't process that.",
