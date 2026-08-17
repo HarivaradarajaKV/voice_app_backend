@@ -666,25 +666,27 @@ private static async planAndExecuteAgenticWorkflow(
       return null;
     };
 
-    // 1. STATUS REVERSAL & CONTEXTUAL UNDO (e.g. "Undo that", "Revert that", "Move order back to preparing", "Change it back")
+    // 1. UNIVERSAL ORDER STATUS CHANGER & REVERSAL (Voice-based status transitions for ANY order to ANY status)
     if (
-      text.includes('move it back to preparing') ||
-      text.includes('move the order back to preparing') ||
-      text.includes('back to preparing') ||
-      text.includes('preparing status ge change maadu') ||
-      text.includes('status back maadu') ||
-      text.includes('revert that') ||
-      text.includes('revert order') ||
-      text.includes('change it back') ||
-      text.includes('undo that') ||
-      text.includes('undo the last status change') ||
-      text.includes('actually mark it as preparing again') ||
-      text === 'undo'
+      normalizedUtterance.includes('ready') ||
+      normalizedUtterance.includes('preparing') ||
+      normalizedUtterance.includes('cooking') ||
+      normalizedUtterance.includes('accept') ||
+      normalizedUtterance.includes('complete') ||
+      normalizedUtterance.includes('served') ||
+      normalizedUtterance.includes('serve') ||
+      normalizedUtterance.includes('cancel') ||
+      normalizedUtterance.includes('undo') ||
+      normalizedUtterance.includes('revert') ||
+      normalizedUtterance.includes('back to')
     ) {
       const order = await findTargetOrder();
+      const numMatch = normalizedUtterance.match(/(?:kds|ord|audit|kot)?-?(\d{3,8})/i) || normalizedUtterance.match(/#(\d+)/i);
+      const queryNum = numMatch ? (numMatch[1] || numMatch[0]) : null;
+
       if (!order) {
         return {
-          spokenResponse: 'No previous order action found to undo or revert.',
+          spokenResponse: queryNum ? `Order #${queryNum} was not found.` : 'No matching order found.',
           displayTranscript: rawTranscript,
           actionClass: 'ACTION',
           detectedLanguage: language,
@@ -693,96 +695,67 @@ private static async planAndExecuteAgenticWorkflow(
         };
       }
 
-      let targetReversalStatus: 'PREPARING' | 'ACCEPTED' | 'READY' | 'NEW' = 'PREPARING';
-      if (text.includes('preparing')) {
-        targetReversalStatus = 'PREPARING';
-      } else if (text.includes('accepted')) {
-        targetReversalStatus = 'ACCEPTED';
-      } else if (text.includes('ready')) {
-        targetReversalStatus = 'READY';
-      } else if (session.lastOrderAction && session.lastOrderAction.orderId === order.id) {
-        targetReversalStatus = (session.lastOrderAction.previousStatus as any) || 'PREPARING';
+      let targetStatus: 'NEW' | 'ACCEPTED' | 'PREPARING' | 'READY' | 'COMPLETED' | 'CANCELLED' = 'READY';
+      const isRevert =
+        normalizedUtterance.includes('undo') ||
+        normalizedUtterance.includes('revert') ||
+        normalizedUtterance.includes('change it back') ||
+        normalizedUtterance.includes('move it back') ||
+        normalizedUtterance.includes('back to previous');
+
+      if (isRevert) {
+        if (session.lastOrderAction && session.lastOrderAction.orderId === order.id && session.lastOrderAction.previousStatus) {
+          targetStatus = session.lastOrderAction.previousStatus as any;
+        } else if (order.orderStatus === 'COMPLETED') {
+          targetStatus = 'READY';
+        } else if (order.orderStatus === 'READY') {
+          targetStatus = 'PREPARING';
+        } else if (order.orderStatus === 'PREPARING') {
+          targetStatus = 'ACCEPTED';
+        } else {
+          targetStatus = 'NEW';
+        }
+      } else if (normalizedUtterance.includes('ready') || normalizedUtterance.includes('serve')) {
+        if (normalizedUtterance.includes('served') || normalizedUtterance.includes('complete')) {
+          targetStatus = 'COMPLETED';
+        } else {
+          targetStatus = 'READY';
+        }
+      } else if (normalizedUtterance.includes('preparing') || normalizedUtterance.includes('cooking') || normalizedUtterance.includes('kitchen')) {
+        targetStatus = 'PREPARING';
+      } else if (normalizedUtterance.includes('accept')) {
+        targetStatus = 'ACCEPTED';
+      } else if (normalizedUtterance.includes('complete') || normalizedUtterance.includes('served')) {
+        targetStatus = 'COMPLETED';
+      } else if (normalizedUtterance.includes('cancel')) {
+        targetStatus = 'CANCELLED';
+      } else if (normalizedUtterance.includes('pending') || normalizedUtterance.includes('new')) {
+        targetStatus = 'NEW';
       }
 
       const previousStatus = order.orderStatus;
+
+      // Deduct inventory if transitioning to ACCEPTED
+      if (previousStatus === 'NEW' && targetStatus === 'ACCEPTED') {
+        try {
+          await InventoryEngineService.deductStockForOrder(order.id, session.userId);
+        } catch (e) {
+          console.error('[VoiceAgent] Stock deduction warning:', e);
+        }
+      }
+
       const updated = await prisma.order.update({
         where: { id: order.id },
-        data: { orderStatus: targetReversalStatus as any },
-      });
-
-      await prisma.orderItem.updateMany({
-        where: { orderId: order.id },
-        data: { itemStatus: targetReversalStatus === 'READY' ? 'READY' : 'PREPARING' },
-      });
-
-      session.lastOrderAction = {
-        orderId: updated.id,
-        orderNumber: updated.orderNumber,
-        previousStatus,
-        newStatus: targetReversalStatus,
-        timestamp: Date.now(),
-      };
-      session.currentEntity = {
-        type: 'order',
-        id: updated.id,
-        name: `Order #${updated.orderNumber}`,
-      };
-
-      const spoken = `Done. Order #${updated.orderNumber} status has been reverted back to ${targetReversalStatus}.`;
-
-      return {
-        spokenResponse: spoken,
-        displayTranscript: rawTranscript,
-        actionClass: 'ACTION',
-        detectedLanguage: language,
-        confirmationRequired: false,
-        actionResult: updated,
-        uiNavigation: {
-          route: '/operations/orders',
-          highlightId: updated.id,
-          filter: { status: targetReversalStatus },
+        data: {
+          orderStatus: targetStatus as any,
+          acceptedAt: targetStatus === 'ACCEPTED' && !order.acceptedAt ? new Date() : order.acceptedAt,
+          completedAt: targetStatus === 'COMPLETED' ? new Date() : (targetStatus !== 'COMPLETED' ? null : order.completedAt),
         },
-        sessionState: { branchId: activeBranchId, activeEntity: session.currentEntity },
-      };
-    }
-
-    // 2. READY TO SERVE (e.g. "Mark order KDS-775955 ready", "Shift order to ready to serve", "Ready to serve")
-    if (
-      text.includes('ready to serve') ||
-      text.includes('mark ready') ||
-      text.includes('mark this order ready') ||
-      text.includes('mark order') && text.includes('ready') ||
-      text.includes('make it ready') ||
-      text.includes('shift') && text.includes('ready') ||
-      text.includes('change') && text.includes('ready') ||
-      text.includes('status ready') ||
-      text.includes('ready status') ||
-      text.includes('ready maadu') ||
-      text.includes('ready karo')
-    ) {
-      const order = await findTargetOrder(['PREPARING', 'ACCEPTED', 'NEW']);
-      if (!order) {
-        const numMatch = normalizedUtterance.match(/(?:kds|ord|audit|kot)?-?(\d{3,8})/i) || normalizedUtterance.match(/#(\d+)/i);
-        const queryNum = numMatch ? (numMatch[1] || numMatch[0]) : null;
-        return {
-          spokenResponse: queryNum ? `Order #${queryNum} was not found.` : 'No matching active order found to mark ready.',
-          displayTranscript: rawTranscript,
-          actionClass: 'ACTION',
-          detectedLanguage: language,
-          confirmationRequired: false,
-          sessionState: { branchId: activeBranchId },
-        };
-      }
-
-      const previousStatus = order.orderStatus;
-      const updated = await prisma.order.update({
-        where: { id: order.id },
-        data: { orderStatus: 'READY' },
       });
 
       await prisma.orderItem.updateMany({
         where: { orderId: order.id },
-        data: { itemStatus: 'READY' as any },
+        data: { itemStatus: targetStatus as any },
       });
 
       await AuditService.log({
@@ -792,7 +765,7 @@ private static async planAndExecuteAgenticWorkflow(
         entity: 'Order',
         entityId: order.id,
         previousValue: previousStatus,
-        newValue: 'READY',
+        newValue: targetStatus,
         ipAddress: 'voice-agent',
       });
 
@@ -800,7 +773,7 @@ private static async planAndExecuteAgenticWorkflow(
         orderId: updated.id,
         orderNumber: updated.orderNumber,
         previousStatus,
-        newStatus: 'READY',
+        newStatus: targetStatus,
         timestamp: Date.now(),
       };
       session.currentEntity = {
@@ -809,7 +782,18 @@ private static async planAndExecuteAgenticWorkflow(
         name: `Order #${updated.orderNumber}`,
       };
 
-      const spoken = `Done. Order #${updated.orderNumber} is now marked ready to serve.`;
+      let spoken = '';
+      if (isRevert) {
+        spoken = `Done. Order #${updated.orderNumber} status has been reverted back to ${targetStatus}.`;
+      } else {
+        const readable =
+          targetStatus === 'READY'
+            ? 'ready to serve'
+            : targetStatus === 'COMPLETED'
+            ? 'completed'
+            : targetStatus.toLowerCase();
+        spoken = `Done. Order #${updated.orderNumber} is now marked ${readable}.`;
+      }
 
       return {
         spokenResponse: spoken,
@@ -821,108 +805,11 @@ private static async planAndExecuteAgenticWorkflow(
         uiNavigation: {
           route: '/operations/orders',
           highlightId: updated.id,
-          filter: { status: 'READY' },
+          filter: { status: targetStatus },
         },
         sessionState: { branchId: activeBranchId, activeEntity: session.currentEntity },
       };
     }
-
-    // 3. SERVE / COMPLETE ORDER (e.g. "Mark order served", "Serve this order", "Complete order")
-    if (
-      text.includes('mark this order served') ||
-      (text.includes('mark order') && text.includes('served')) ||
-      text.includes('serve this order') ||
-      text.includes('serve it') ||
-      text.includes('complete order') ||
-      text.includes('order complete maadu') ||
-      text.includes('serve maadu') ||
-      text.includes('mark it served')
-    ) {
-      const order = await findTargetOrder(['READY', 'PREPARING', 'ACCEPTED']);
-      if (!order) {
-        return {
-          spokenResponse: 'No order found to mark served.',
-          displayTranscript: rawTranscript,
-          actionClass: 'ACTION',
-          detectedLanguage: language,
-          confirmationRequired: false,
-          sessionState: { branchId: activeBranchId },
-        };
-      }
-
-      const previousStatus = order.orderStatus;
-      const updated = await prisma.order.update({
-        where: { id: order.id },
-        data: {
-          orderStatus: 'COMPLETED',
-          completedAt: new Date(),
-        },
-      });
-
-      await prisma.orderItem.updateMany({
-        where: { orderId: order.id },
-        data: { itemStatus: 'SERVED' as any },
-      });
-
-      session.lastOrderAction = {
-        orderId: updated.id,
-        orderNumber: updated.orderNumber,
-        previousStatus,
-        newStatus: 'COMPLETED',
-        timestamp: Date.now(),
-      };
-      session.currentEntity = {
-        type: 'order',
-        id: updated.id,
-        name: `Order #${updated.orderNumber}`,
-      };
-
-      const spoken = `Done. Order #${updated.orderNumber} has been marked as served and completed.`;
-
-      return {
-        spokenResponse: spoken,
-        displayTranscript: rawTranscript,
-        actionClass: 'ACTION',
-        detectedLanguage: language,
-        confirmationRequired: false,
-        actionResult: updated,
-        uiNavigation: {
-          route: '/operations/orders',
-          highlightId: updated.id,
-          filter: { status: 'COMPLETED' },
-        },
-        sessionState: { branchId: activeBranchId, activeEntity: session.currentEntity },
-      };
-    }
-
-    // 4. ACCEPT CUSTOMER ORDER WITH ATOMIC BOM DEDUCTION (e.g. "Accept order KDS-775955", "Accept this order")
-    if (
-      text.includes('accept this order') ||
-      text.includes('accept it') ||
-      text.includes('take this order') ||
-      text.includes('approve this order') ||
-      text.includes('confirm this order') ||
-      text.includes('accept the first order') ||
-      text.includes('accept the order') ||
-      text.includes('order accept') ||
-      text.includes('accept order') ||
-      text.includes('ee order accept maadu') ||
-      text.includes('order accept maadi') ||
-      text.includes('accept maadu') ||
-      text.includes('accept karo') ||
-      text.includes('accept pannunga') ||
-      }
-
-      if (!order) {
-        return {
-          spokenResponse: 'No orders found to accept right now.',
-          displayTranscript: rawTranscript,
-          actionClass: 'ACTION',
-          detectedLanguage: language,
-          confirmationRequired: false,
-          sessionState: { branchId: activeBranchId },
-        };
-      }
 
       if (session.userRole === RoleType.SUPPLIER) {
         return {
