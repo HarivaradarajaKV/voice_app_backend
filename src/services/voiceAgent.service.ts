@@ -499,6 +499,17 @@ export class VoiceAgentService {
         text.includes('go to') ||
         text.includes('nodona') ||
         text.includes('section') ||
+        text.includes('kholo') ||
+        text.includes('thurakku') ||
+        text.includes('vellandi') ||
+        text.includes('open dashboard') ||
+        text.includes('dashboard') ||
+        text.includes('open kitchen') ||
+        text.includes('kitchen') ||
+        text.includes('inventory') ||
+        text.includes('customer orders') ||
+        text.includes('ready to serve') ||
+        text.includes('settings') ||
         (text.includes('show') && text.includes('report')) ||
         text.includes('report nodona')) &&
       !text.includes('first order') &&
@@ -508,6 +519,8 @@ export class VoiceAgentService {
       !text.includes('open order') &&
       !text.includes('stock') &&
       !text.includes('add') &&
+      !text.includes('change') &&
+      !text.includes('mark') &&
       !text.includes('yestu') &&
       !text.includes('kitna')
     ) {
@@ -1956,6 +1969,16 @@ private static async planAndExecuteAgenticWorkflow(
     // 8. Waste & Spoilage
     if (lower.includes('waste') || lower.includes('spoilage')) {
       return { route: this.CANONICAL_ROUTES.waste.route, name: 'Waste & Spoilage' };
+    }
+
+    // 9. Settings
+    if (lower.includes('setting') || lower.includes('settings') || lower.includes('configuration')) {
+      return { route: '/settings', name: 'Settings' };
+    }
+
+    // 10. Dashboard
+    if (lower.includes('dashboard') || lower.includes('home') || lower.includes('main screen')) {
+      return { route: this.CANONICAL_ROUTES.dashboard.route, name: 'Dashboard' };
     }
 
     // Default fallback to Dashboard

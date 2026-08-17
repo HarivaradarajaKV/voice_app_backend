@@ -1,9 +1,13 @@
 import express from 'express';
+import http from 'http';
+import { WebSocketServer } from 'ws';
+import url from 'url';
 import cors from 'cors';
 import path from 'path';
 import { config } from './config';
 import routes from './routes';
 import { errorHandler } from './middleware/errorHandler.middleware';
+import { SarvamVoiceService } from './services/sarvamVoice.service';
 
 const app = express();
 
@@ -48,10 +52,34 @@ app.use('/api/v1', routes);
 app.use(errorHandler);
 
 const PORT = config.port;
+const server = http.createServer(app);
+
+// Attach WebSocket server for real-time Sarvam Saaras v3 STT streaming
+const wss = new WebSocketServer({ noServer: true });
+
+server.on('upgrade', (request, socket, head) => {
+  const parsedUrl = url.parse(request.url || '', true);
+  const pathname = parsedUrl.pathname;
+
+  if (pathname === '/api/v1/voice/sarvam-stream') {
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      wss.emit('connection', ws, request);
+    });
+  } else {
+    socket.destroy();
+  }
+});
+
+wss.on('connection', (ws, request) => {
+  const parsedUrl = url.parse(request.url || '', true);
+  SarvamVoiceService.handleClientConnection(ws, parsedUrl.query);
+});
+
 if (process.env.NODE_ENV !== 'test') {
-  app.listen(PORT, '0.0.0.0', () => {
+  server.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Data Udipi Server running at http://0.0.0.0:${PORT}`);
     console.log(`📡 API Endpoints available at http://localhost:${PORT}/api/v1`);
+    console.log(`🎙️ Sarvam Voice WebSocket available at ws://localhost:${PORT}/api/v1/voice/sarvam-stream`);
   });
 }
 

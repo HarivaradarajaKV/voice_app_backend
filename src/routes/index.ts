@@ -276,4 +276,83 @@ router.post('/voice/vapi-webhook', async (req, res) => {
   }
 });
 
+// ─── SARVAM AI SPEECH SERVICES (Saaras v3 & Bulbul v3) ────────────────────────
+import { SarvamVoiceService } from '../services/sarvamVoice.service';
+
+/**
+ * Synthesizes speech using Sarvam Bulbul v3
+ */
+router.post('/voice/sarvam-tts', async (req, res) => {
+  try {
+    const { text, language = 'kannada_english' } = req.body;
+    if (!text) {
+      return res.status(400).json({ error: 'Text is required for TTS synthesis' });
+    }
+
+    const ttsResult = await SarvamVoiceService.synthesizeSpeechBulbulV3(text, language);
+    return res.json({
+      success: true,
+      audioBase64: ttsResult.audioBase64,
+      format: ttsResult.format,
+    });
+  } catch (err: any) {
+    console.error('[Sarvam TTS Route] Error:', err);
+    return res.status(500).json({ error: err.message || 'TTS synthesis failed' });
+  }
+});
+
+/**
+ * Processes a voice command through VoiceAgentService and returns Bulbul v3 speech audio
+ */
+router.post('/voice/sarvam-command', async (req, res) => {
+  try {
+    const {
+      transcript,
+      sessionId = `sarvam_${Date.now()}`,
+      branchId = 'cmsva145f000gitlp27vm05f5',
+      userId = 'usr_manager_01',
+      userRole = 'MANAGER',
+      userName = 'Manager',
+      currentRoute = '/',
+    } = req.body;
+
+    if (!transcript) {
+      return res.status(400).json({ error: 'Transcript is required' });
+    }
+
+    const result = await VoiceAgentService.processConversationalTurn(
+      transcript,
+      sessionId,
+      userId,
+      userRole as any,
+      branchId,
+      currentRoute,
+      userName
+    );
+
+    const detectedLanguage = result.detectedLanguage || 'kannada_english';
+    const ttsResult = await SarvamVoiceService.synthesizeSpeechBulbulV3(
+      result.spokenResponse,
+      detectedLanguage
+    );
+
+    return res.json({
+      success: true,
+      transcript,
+      detectedLanguage,
+      intent: result.actionClass,
+      uiNavigation: result.uiNavigation,
+      actionResult: result.actionResult,
+      confirmationRequired: result.confirmationRequired,
+      responseText: result.spokenResponse,
+      responseLanguage: detectedLanguage,
+      audioBase64: ttsResult.audioBase64,
+      audioFormat: ttsResult.format,
+    });
+  } catch (err: any) {
+    console.error('[Sarvam Command Route] Error:', err);
+    return res.status(500).json({ error: err.message || 'Command processing failed' });
+  }
+});
+
 export default router;
