@@ -1,0 +1,854 @@
+// Prisma schema for Data Udipi Restaurant Inventory, Kitchen & Procurement Management Platform
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["driverAdapters"]
+}
+
+enum RoleType {
+  SUPER_ADMIN
+  RESTAURANT_OWNER
+  MANAGER
+  INVENTORY_MANAGER
+  CHEF
+  PROCUREMENT_STAFF
+  STAFF
+  SUPPLIER
+}
+
+enum StockStatus {
+  HEALTHY
+  LOW_STOCK
+  CRITICAL
+  OUT_OF_STOCK
+  EXPIRING_SOON
+  EXPIRED
+}
+
+enum TransactionType {
+  PURCHASE_RECEIPT
+  SALE_CONSUMPTION
+  MANUAL_ADJUSTMENT
+  WASTE
+  SPOILAGE
+  TRANSFER_IN
+  TRANSFER_OUT
+  RETURN_TO_SUPPLIER
+  CORRECTION
+}
+
+enum OrderType {
+  DINE_IN
+  TAKEAWAY
+  DELIVERY
+  VIP
+}
+
+enum OrderStatus {
+  NEW
+  ACCEPTED
+  PREPARING
+  READY
+  SERVED
+  COMPLETED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  REFUNDED
+}
+
+enum KitchenItemStatus {
+  NEW
+  PREPARING
+  READY
+  SERVED
+  CANCELLED
+}
+
+enum POStatus {
+  DRAFT
+  PENDING_APPROVAL
+  SENT
+  SUPPLIER_REVIEWING
+  CONFIRMED
+  PARTIALLY_CONFIRMED
+  DISPATCHED
+  PARTIALLY_RECEIVED
+  RECEIVED
+  CANCELLED
+}
+
+enum DeliveryStatus {
+  PENDING
+  CONFIRMED
+  DISPATCHED
+  IN_TRANSIT
+  ARRIVED
+  RECEIVED
+  DELAYED
+}
+
+enum ReconciliationStatus {
+  MATCHED
+  MINOR_DIFFERENCE
+  MAJOR_DIFFERENCE
+  REQUIRES_REVIEW
+  APPROVED
+  REJECTED
+}
+
+enum DiscrepancyType {
+  QUANTITY_MISMATCH
+  PRICE_MISMATCH
+  UNKNOWN_ITEM
+  MISSING_ITEM
+  SUPPLIER_MISMATCH
+  TAX_MISMATCH
+}
+
+enum WasteReason {
+  SPOILAGE
+  EXPIRED
+  COOKING_LOSS
+  OVERPRODUCTION
+  DAMAGED
+  INCORRECT_PREPARATION
+  OTHER
+}
+
+// ----------------------------------------------------
+// 1. AUTH & TENANCY
+// ----------------------------------------------------
+
+model Restaurant {
+  id              String    @id @default(cuid())
+  name            String
+  legalName       String
+  address         String
+  phone           String
+  email           String
+  gstNumber       String?
+  taxInfo         String?
+  logo            String?
+  businessHours   String?
+  defaultCurrency String    @default("INR")
+  defaultTimezone String    @default("Asia/Kolkata")
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  branches        Branch[]
+}
+
+model Branch {
+  id              String    @id @default(cuid())
+  restaurantId    String
+  restaurant      Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  name            String
+  code            String    @unique
+  address         String
+  contact         String
+  managerName     String?
+  openingTime     String    @default("06:00")
+  closingTime     String    @default("23:00")
+  status          String    @default("ACTIVE")
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  users           User[]
+  kitchenStations KitchenStation[]
+  ingredients     Ingredient[]
+  inventoryBatches InventoryBatch[]
+  inventoryTransactions InventoryTransaction[]
+  wasteRecords    WasteRecord[]
+  menuItems       MenuItem[]
+  orders          Order[]
+  recommendations PurchaseRecommendation[]
+  purchaseOrders  PurchaseOrder[]
+  deliveries      Delivery[]
+  receivingRecords ReceivingRecord[]
+  invoices        Invoice[]
+  reconciliations ReconciliationRecord[]
+  dailyReports    DailyReport[]
+  auditLogs       AuditLog[]
+  notifications   Notification[]
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  passwordHash  String
+  name          String
+  phone         String?
+  role          RoleType  @default(STAFF)
+  branchId      String?
+  branch        Branch?   @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  supplierId    String?
+  supplier      Supplier? @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  profileImage  String?
+  status        String    @default("ACTIVE")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  createdOrders Order[]   @relation("OrderCreatedBy")
+  transactions  InventoryTransaction[]
+  wasteLogs     WasteRecord[]
+  createdPOs    PurchaseOrder[] @relation("POCreatedBy")
+  approvedPOs   PurchaseOrder[] @relation("POApprovedBy")
+  receivingLogs ReceivingRecord[]
+  uploadedInvoices Invoice[]
+  approvedReconciliations ReconciliationRecord[]
+  auditLogs     AuditLog[]
+  notifications Notification[]
+}
+
+// ----------------------------------------------------
+// 2. MASTER DATA & UNITS
+// ----------------------------------------------------
+
+model KitchenStation {
+  id          String     @id @default(cuid())
+  branchId    String
+  branch      Branch     @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  name        String
+  code        String
+  description String?
+  isActive    Boolean    @default(true)
+
+  menuItems   MenuItem[]
+  kitchenOrderItems KitchenOrderItem[]
+}
+
+model IngredientCategory {
+  id          String       @id @default(cuid())
+  name        String       @unique
+  description String?
+
+  ingredients Ingredient[]
+}
+
+model Unit {
+  id           String    @id @default(cuid())
+  name         String    @unique
+  symbol       String    @unique
+  unitType     String    // WEIGHT, VOLUME, COUNT
+  baseUnit     String?   // kg, litre, piece
+  factorToBase Float     @default(1.0)
+}
+
+model UnitConversion {
+  id       String @id @default(cuid())
+  fromUnit String
+  toUnit   String
+  factor   Float
+
+  @@unique([fromUnit, toUnit])
+}
+
+model Ingredient {
+  id                   String             @id @default(cuid())
+  branchId             String
+  branch               Branch             @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  name                 String
+  sku                  String
+  categoryId           String
+  category             IngredientCategory @relation(fields: [categoryId], references: [id])
+  baseUnit             String             @default("kg") // kg, g, litre, ml, piece, packet
+  purchaseUnit         String             @default("kg")
+  stockUnit            String             @default("g")
+  conversionFactor     Float              @default(1000.0) // 1 purchaseUnit = factor * stockUnit
+  currentStock         Float              @default(0.0) // in stockUnit (e.g. grams/ml)
+  minStock             Float              @default(1000.0) // stockUnit
+  reorderLevel         Float              @default(2000.0) // stockUnit
+  targetStock          Float              @default(5000.0) // stockUnit
+  maxStock             Float              @default(10000.0) // stockUnit
+  unitCost             Float              @default(0.0) // cost per stockUnit
+  weightedAverageCost  Float              @default(0.0)
+  storageLocation      String?
+  status               StockStatus        @default(HEALTHY)
+  preferredSupplierId  String?
+  preferredSupplier    Supplier?          @relation("PreferredSupplier", fields: [preferredSupplierId], references: [id], onDelete: SetNull)
+  secondarySupplierId  String?
+  secondarySupplier    Supplier?          @relation("SecondarySupplier", fields: [secondarySupplierId], references: [id], onDelete: SetNull)
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  batches              InventoryBatch[]
+  transactions         InventoryTransaction[]
+  wasteRecords         WasteRecord[]
+  recipeBOMItems       RecipeBOMItem[]
+  supplierMappings     SupplierIngredient[]
+  poItems              PurchaseOrderItem[]
+  recommendationItems  PurchaseRecommendationItem[]
+  receivingItems       ReceivingItem[]
+
+  @@unique([branchId, sku])
+}
+
+model InventoryBatch {
+  id                String       @id @default(cuid())
+  ingredientId      String
+  ingredient        Ingredient   @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+  branchId          String
+  branch            Branch       @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  batchNumber       String
+  initialQuantity   Float
+  remainingQuantity Float
+  unitCost          Float
+  purchaseDate      DateTime     @default(now())
+  mfgDate           DateTime?
+  expiryDate        DateTime?
+  supplierId        String?
+  supplier          Supplier?    @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  status            String       @default("ACTIVE")
+  createdAt         DateTime     @default(now())
+
+  transactions      InventoryTransaction[]
+}
+
+model InventoryTransaction {
+  id                String          @id @default(cuid())
+  branchId          String
+  branch            Branch          @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  ingredientId      String
+  ingredient        Ingredient      @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+  batchId           String?
+  batch             InventoryBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  transactionType   TransactionType
+  quantity          Float           // Delta (e.g. -500 for consumption, +5000 for receipt)
+  unit              String          // stock unit
+  unitCost          Float           @default(0.0)
+  totalCost         Float           @default(0.0)
+  previousStock     Float
+  newStock          Float
+  reason            String?
+  referenceType     String?         // ORDER, PO, WASTE, MANUAL
+  referenceId       String?
+  performedByUserId String?
+  performedByUser   User?           @relation(fields: [performedByUserId], references: [id], onDelete: SetNull)
+  notes             String?
+  createdAt         DateTime        @default(now())
+}
+
+model WasteRecord {
+  id                String      @id @default(cuid())
+  branchId          String
+  branch            Branch      @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  ingredientId      String
+  ingredient        Ingredient  @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+  quantity          Float
+  unit              String
+  unitCost          Float
+  totalLoss         Float
+  reason            WasteReason @default(SPOILAGE)
+  notes             String?
+  recordedByUserId  String?
+  recordedByUser    User?       @relation(fields: [recordedByUserId], references: [id], onDelete: SetNull)
+  recordedAt        DateTime    @default(now())
+}
+
+// ----------------------------------------------------
+// 3. MENU & RECIPE BOM ENGINE
+// ----------------------------------------------------
+
+model MenuCategory {
+  id          String     @id @default(cuid())
+  name        String     @unique
+  description String?
+  sortOrder   Int        @default(0)
+
+  menuItems   MenuItem[]
+}
+
+model MenuItem {
+  id              String         @id @default(cuid())
+  branchId        String
+  branch          Branch         @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  name            String
+  code            String
+  categoryId      String
+  category        MenuCategory   @relation(fields: [categoryId], references: [id])
+  description     String?
+  sellingPrice    Float
+  taxRate         Float          @default(5.0) // GST 5% for restaurant food
+  image           String?
+  stationId       String?
+  station         KitchenStation? @relation(fields: [stationId], references: [id], onDelete: SetNull)
+  standardPortion Float          @default(1.0)
+  isActive        Boolean        @default(true)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  recipe          Recipe?
+  orderItems      OrderItem[]
+
+  @@unique([branchId, code])
+}
+
+model Recipe {
+  id              String          @id @default(cuid())
+  menuItemId      String          @unique
+  menuItem        MenuItem        @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  name            String
+  description     String?
+  standardPortion Float           @default(1.0) // E.g. 10 idlis or 1 plate
+  version         Int             @default(1)
+  isActive        Boolean         @default(true)
+  totalCost       Float           @default(0.0)
+  grossMargin     Float           @default(0.0)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  items           RecipeBOMItem[]
+  versions        RecipeVersion[]
+}
+
+model RecipeBOMItem {
+  id              String      @id @default(cuid())
+  recipeId        String
+  recipe          Recipe      @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  ingredientId    String
+  ingredient      Ingredient  @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+  quantity        Float       // Quantity needed for standardPortion
+  unit            String      // e.g. g, ml, piece
+  prepLossPercent Float       @default(0.0)
+  yieldPercent    Float       @default(100.0)
+  isOptional      Boolean     @default(false)
+  notes           String?
+}
+
+model RecipeVersion {
+  id              String    @id @default(cuid())
+  recipeId        String
+  recipe          Recipe    @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  versionNumber   Int
+  snapshotJson    String    // Full BOM snapshot
+  changedByUserId String?
+  reason          String?
+  createdAt       DateTime  @default(now())
+}
+
+// ----------------------------------------------------
+// 4. ORDERS & KITCHEN DISPLAY SYSTEM (KDS)
+// ----------------------------------------------------
+
+model Order {
+  id              String         @id @default(cuid())
+  branchId        String
+  branch          Branch         @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  orderNumber     String
+  orderType       OrderType      @default(DINE_IN)
+  tableNumber     String?
+  customerName    String?
+  customerPhone   String?
+  priority        Boolean        @default(false)
+  paymentStatus   PaymentStatus  @default(PAID)
+  orderStatus     OrderStatus    @default(NEW)
+  subtotal        Float          @default(0.0)
+  taxAmount       Float          @default(0.0)
+  totalAmount     Float          @default(0.0)
+  notes           String?
+  createdByUserId String?
+  createdByUser   User?          @relation("OrderCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  acceptedAt      DateTime?
+  completedAt     DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  items           OrderItem[]
+  kitchenItems    KitchenOrderItem[]
+
+  @@unique([branchId, orderNumber])
+}
+
+model OrderItem {
+  id              String            @id @default(cuid())
+  orderId         String
+  order           Order             @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  menuItemId      String
+  menuItem        MenuItem          @relation(fields: [menuItemId], references: [id])
+  quantity        Float
+  unitPrice       Float
+  totalPrice      Float
+  notes           String?
+  stationId       String?
+  itemStatus      KitchenItemStatus @default(NEW)
+
+  kitchenItems    KitchenOrderItem[]
+}
+
+model KitchenOrderItem {
+  id              String            @id @default(cuid())
+  orderId         String
+  order           Order             @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderItemId     String
+  orderItem       OrderItem         @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  stationId       String
+  station         KitchenStation    @relation(fields: [stationId], references: [id], onDelete: Cascade)
+  status          KitchenItemStatus @default(NEW)
+  elapsedMinutes  Int               @default(0)
+  priority        Boolean           @default(false)
+  startedAt       DateTime?
+  readyAt         DateTime?
+  completedAt     DateTime?
+}
+
+// ----------------------------------------------------
+// 5. SUPPLIERS & PROCUREMENT PIPELINE
+// ----------------------------------------------------
+
+model Supplier {
+  id               String               @id @default(cuid())
+  name             String
+  contactPerson    String
+  phone            String
+  whatsappNumber   String
+  email            String
+  address          String
+  gstNumber        String?
+  paymentTerms     String?              @default("Net 15")
+  deliverySchedule String?              @default("Daily Morning (6 AM - 8 AM)")
+  leadTimeDays     Int                  @default(1)
+  status           String               @default("ACTIVE")
+  rating           Float                @default(4.8)
+  reliabilityScore Float                @default(95.0)
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+
+  users            User[]
+  preferredIngredients Ingredient[]     @relation("PreferredSupplier")
+  secondaryIngredients Ingredient[]     @relation("SecondarySupplier")
+  supplierIngredients SupplierIngredient[]
+  purchaseOrders   PurchaseOrder[]
+  deliveries       Delivery[]
+  batches          InventoryBatch[]
+  invoices         Invoice[]
+  confirmations    SupplierConfirmation[]
+  recommendationItems PurchaseRecommendationItem[]
+}
+
+model SupplierIngredient {
+  id               String     @id @default(cuid())
+  supplierId       String
+  supplier         Supplier   @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  ingredientId     String
+  ingredient       Ingredient @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+  isPrimary        Boolean    @default(true)
+  price            Float      // Price per purchaseUnit
+  minOrderQty      Float      @default(1.0)
+  leadTimeDays     Int        @default(1)
+  deliveryDays     String?    @default("Mon,Tue,Wed,Thu,Fri,Sat,Sun")
+  qualityRating    Float      @default(5.0)
+  reliabilityScore Float      @default(95.0)
+
+  @@unique([supplierId, ingredientId])
+}
+
+model PurchaseRecommendation {
+  id                 String                       @id @default(cuid())
+  branchId           String
+  branch             Branch                       @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  generatedAt        DateTime                     @default(now())
+  status             String                       @default("PENDING") // PENDING, APPROVED, DISMISSED
+  totalEstimatedCost Float                        @default(0.0)
+  notes              String?
+
+  items              PurchaseRecommendationItem[]
+}
+
+model PurchaseRecommendationItem {
+  id               String                 @id @default(cuid())
+  recommendationId String
+  recommendation   PurchaseRecommendation @relation(fields: [recommendationId], references: [id], onDelete: Cascade)
+  ingredientId     String
+  ingredient       Ingredient             @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+  currentStock     Float                  // in stockUnit
+  forecastDemand   Float                  // in stockUnit
+  targetStock      Float                  // in stockUnit
+  recommendedQty   Float                  // in purchaseUnit
+  approvedQty      Float                  // in purchaseUnit
+  unit             String                 // purchaseUnit
+  supplierId       String?
+  supplier         Supplier?              @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  unitPrice        Float                  @default(0.0)
+  estimatedCost    Float                  @default(0.0)
+  status           String                 @default("PENDING") // PENDING, APPROVED, REJECTED, MODIFIED
+  overrideReason   String?
+}
+
+model PurchaseOrder {
+  id                   String                @id @default(cuid())
+  poNumber             String
+  branchId             String
+  branch               Branch                @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  supplierId           String
+  supplier             Supplier              @relation(fields: [supplierId], references: [id])
+  orderDate            DateTime              @default(now())
+  expectedDeliveryDate DateTime
+  status               POStatus              @default(DRAFT)
+  subtotal             Float                 @default(0.0)
+  taxAmount            Float                 @default(0.0)
+  totalAmount          Float                 @default(0.0)
+  notes                String?
+  whatsappMessage      String?
+  whatsappStatus       String?               @default("NOT_SENT")
+  createdByUserId      String?
+  createdByUser        User?                 @relation("POCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  approvedByUserId     String?
+  approvedByUser       User?                 @relation("POApprovedBy", fields: [approvedByUserId], references: [id], onDelete: SetNull)
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+
+  items                PurchaseOrderItem[]
+  confirmations        SupplierConfirmation[]
+  deliveries           Delivery[]
+  receivingRecords     ReceivingRecord[]
+  invoices             Invoice[]
+  reconciliations      ReconciliationRecord[]
+
+  @@unique([branchId, poNumber])
+}
+
+model PurchaseOrderItem {
+  id              String        @id @default(cuid())
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  ingredientId    String
+  ingredient      Ingredient    @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+  quantity        Float         // in purchaseUnit
+  unit            String
+  unitPrice       Float
+  totalPrice      Float
+  receivedQty     Float         @default(0.0)
+  damagedQty      Float         @default(0.0)
+  rejectedQty     Float         @default(0.0)
+  acceptedQty     Float         @default(0.0)
+}
+
+model SupplierConfirmation {
+  id                    String        @id @default(cuid())
+  purchaseOrderId       String
+  purchaseOrder         PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  supplierId            String
+  supplier              Supplier      @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  status                String        @default("CONFIRMED") // CONFIRMED, MODIFIED, REJECTED
+  confirmedDeliveryDate DateTime?
+  modificationsJson     String?       // Any changed quantities/substitutions
+  supplierNotes         String?
+  confirmedAt           DateTime      @default(now())
+}
+
+// ----------------------------------------------------
+// 6. DELIVERIES & GOODS RECEIVING
+// ----------------------------------------------------
+
+model Delivery {
+  id              String          @id @default(cuid())
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder   @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  supplierId      String
+  supplier        Supplier        @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  branchId        String
+  branch          Branch          @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  dispatchDate    DateTime        @default(now())
+  expectedArrival DateTime
+  actualArrival   DateTime?
+  status          DeliveryStatus  @default(PENDING)
+  driverName      String?
+  driverContact   String?
+  trackingNotes   String?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  receivingRecords ReceivingRecord[]
+}
+
+model ReceivingRecord {
+  id                String          @id @default(cuid())
+  purchaseOrderId   String
+  purchaseOrder     PurchaseOrder   @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  deliveryId        String?
+  delivery          Delivery?       @relation(fields: [deliveryId], references: [id], onDelete: SetNull)
+  branchId          String
+  branch            Branch          @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  receivingNumber   String
+  receivedByUserId  String?
+  receivedByUser    User?           @relation(fields: [receivedByUserId], references: [id], onDelete: SetNull)
+  receivedAt        DateTime        @default(now())
+  status            String          @default("COMPLETED")
+  notes             String?
+
+  items             ReceivingItem[]
+  reconciliations   ReconciliationRecord[]
+
+  @@unique([branchId, receivingNumber])
+}
+
+model ReceivingItem {
+  id                String          @id @default(cuid())
+  receivingRecordId String
+  receivingRecord   ReceivingRecord @relation(fields: [receivingRecordId], references: [id], onDelete: Cascade)
+  ingredientId      String
+  ingredient        Ingredient      @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+  expectedQty       Float
+  receivedQty       Float
+  damagedQty        Float           @default(0.0)
+  rejectedQty       Float           @default(0.0)
+  acceptedQty       Float
+  unit              String
+  unitCost          Float
+  batchNumber       String?
+  expiryDate        DateTime?
+}
+
+// ----------------------------------------------------
+// 7. INVOICE MANAGEMENT, OCR & RECONCILIATION
+// ----------------------------------------------------
+
+model Invoice {
+  id                String          @id @default(cuid())
+  invoiceNumber     String
+  purchaseOrderId   String?
+  purchaseOrder     PurchaseOrder?  @relation(fields: [purchaseOrderId], references: [id], onDelete: SetNull)
+  supplierId        String
+  supplier          Supplier        @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  branchId          String
+  branch            Branch          @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  invoiceDate       DateTime        @default(now())
+  subtotal          Float           @default(0.0)
+  taxAmount         Float           @default(0.0)
+  totalAmount       Float           @default(0.0)
+  documentUrl       String?
+  fileName          String?
+  mimeType          String?
+  fileSize          Int?
+  processingStatus  String          @default("PROCESSED") // UPLOADED, PROCESSING, PROCESSED, FAILED
+  uploadedByUserId  String?
+  uploadedByUser    User?           @relation(fields: [uploadedByUserId], references: [id], onDelete: SetNull)
+  uploadedAt        DateTime        @default(now())
+
+  items             InvoiceItem[]
+  extractions       InvoiceExtraction[]
+  reconciliations   ReconciliationRecord[]
+
+  @@unique([supplierId, invoiceNumber])
+}
+
+model InvoiceItem {
+  id          String   @id @default(cuid())
+  invoiceId   String
+  invoice     Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  itemName    String
+  ingredientId String?
+  quantity    Float
+  unit        String
+  unitPrice   Float
+  taxAmount   Float    @default(0.0)
+  totalPrice  Float
+}
+
+model InvoiceExtraction {
+  id              String   @id @default(cuid())
+  invoiceId       String
+  invoice         Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  extractedJson   String   // Extracted structured key-values
+  confidenceScore Float    @default(0.98)
+  rawText         String?
+  extractedAt     DateTime @default(now())
+}
+
+model ReconciliationRecord {
+  id                String                      @id @default(cuid())
+  purchaseOrderId   String
+  purchaseOrder     PurchaseOrder               @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  invoiceId         String
+  invoice           Invoice                     @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  receivingRecordId String?
+  receivingRecord   ReceivingRecord?            @relation(fields: [receivingRecordId], references: [id], onDelete: SetNull)
+  branchId          String
+  branch            Branch                      @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  status            ReconciliationStatus        @default(MATCHED)
+  totalVariance     Float                       @default(0.0)
+  approvedByUserId  String?
+  approvedByUser    User?                       @relation(fields: [approvedByUserId], references: [id], onDelete: SetNull)
+  approvedAt        DateTime?
+  reviewNotes       String?
+  createdAt         DateTime                    @default(now())
+
+  discrepancies     ReconciliationDiscrepancy[]
+}
+
+model ReconciliationDiscrepancy {
+  id                     String               @id @default(cuid())
+  reconciliationRecordId String
+  reconciliationRecord   ReconciliationRecord @relation(fields: [reconciliationRecordId], references: [id], onDelete: Cascade)
+  discrepancyType        DiscrepancyType
+  itemName               String
+  poValue                String
+  invoiceValue           String
+  variance               Float
+  severity               String               @default("LOW") // LOW, MEDIUM, HIGH
+  resolution             String?
+  notes                  String?
+}
+
+// ----------------------------------------------------
+// 8. REPORTS, AUDITING & NOTIFICATIONS
+// ----------------------------------------------------
+
+model DailyReport {
+  id                   String   @id @default(cuid())
+  branchId             String
+  branch               Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  reportDate           DateTime @default(now())
+  totalSales           Float    @default(0.0)
+  totalOrders          Int      @default(0)
+  avgOrderValue        Float    @default(0.0)
+  totalConsumptionCost Float    @default(0.0)
+  foodCostPercent      Float    @default(0.0)
+  totalWasteCost       Float    @default(0.0)
+  totalInventoryValue  Float    @default(0.0)
+  openingStockValue    Float    @default(0.0)
+  closingStockValue    Float    @default(0.0)
+  poCount              Int      @default(0)
+  poSpend              Float    @default(0.0)
+  supplierOnTimeRate   Float    @default(100.0)
+  generatedAt          DateTime @default(now())
+}
+
+model AuditLog {
+  id            String   @id @default(cuid())
+  branchId      String?
+  branch        Branch?  @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  userId        String?
+  user          User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action        String
+  entity        String
+  entityId      String?
+  previousValue String?
+  newValue      String?
+  ipAddress     String?
+  createdAt     DateTime @default(now())
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  branchId  String?
+  branch    Branch?  @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  title     String
+  message   String
+  type      String   @default("INFO") // STOCK_ALERT, PO_UPDATE, INVOICE_DISCREPANCY, KDS_ALERT, SYSTEM
+  severity  String   @default("NORMAL") // NORMAL, WARNING, CRITICAL
+  isRead    Boolean  @default(false)
+  link      String?
+  createdAt DateTime @default(now())
+}
