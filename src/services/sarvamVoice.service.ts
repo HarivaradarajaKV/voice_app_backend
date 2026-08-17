@@ -40,8 +40,35 @@ export interface SarvamVoiceSession {
 
 export class SarvamVoiceService {
   private static readonly SARVAM_STT_WS_URL =
-    'wss://api.sarvam.ai/speech-to-text-realtime/ws?model=saaras:v3-realtime&language_code=auto';
+    'wss://api.sarvam.ai/speech-to-text/ws?model=saaras:v3&mode=transcribe&sample_rate=16000&input_audio_codec=pcm_s16le';
   private static readonly SARVAM_TTS_REST_URL = 'https://api.sarvam.ai/text-to-speech';
+
+  /**
+   * Generates a standard WAV header for PCM Linear16 samples (16kHz, 16-bit, mono)
+   */
+  private static createWavBuffer(pcmSamples: Buffer, sampleRate = 16000): Buffer {
+    const numChannels = 1;
+    const byteRate = sampleRate * numChannels * 2;
+    const blockAlign = numChannels * 2;
+    const dataSize = pcmSamples.length;
+    const header = Buffer.alloc(44);
+
+    header.write('RIFF', 0);
+    header.writeUInt32LE(36 + dataSize, 4);
+    header.write('WAVE', 8);
+    header.write('fmt ', 12);
+    header.writeUInt32LE(16, 16); // Subchunk1Size
+    header.writeUInt16LE(1, 20);  // PCM format
+    header.writeUInt16LE(numChannels, 22);
+    header.writeUInt32LE(sampleRate, 24);
+    header.writeUInt32LE(byteRate, 28);
+    header.writeUInt16LE(blockAlign, 32);
+    header.writeUInt16LE(16, 34); // 16-bit
+    header.write('data', 36);
+    header.writeUInt32LE(dataSize, 40);
+
+    return Buffer.concat([header, pcmSamples]);
+  }
 
   /**
    * Initializes a real-time streaming bridge between a browser client and Sarvam Saaras v3 STT.
@@ -53,6 +80,8 @@ export class SarvamVoiceService {
     const userRole = queryParams.userRole || 'MANAGER';
     const userName = queryParams.userName || 'Manager';
     const currentRoute = queryParams.currentRoute || '/';
+
+    console.log('[Sarvam] Frontend WS connected');
 
     const session: SarvamVoiceSession = {
       sessionId,
@@ -69,7 +98,7 @@ export class SarvamVoiceService {
 
     const sarvamApiKey = process.env.SARVAM_API_KEY || (config as any).sarvamApiKey || '';
     if (!sarvamApiKey) {
-      console.warn('[SarvamVoiceService] ⚠️ SARVAM_API_KEY is not set in backend environment.');
+      console.warn('[Sarvam] ⚠️ SARVAM_API_KEY is not set in backend environment.');
       clientWs.send(
         JSON.stringify({
           type: 'error',
@@ -79,7 +108,10 @@ export class SarvamVoiceService {
       return;
     }
 
-    // Connect to Sarvam Saaras v3 Realtime WebSocket
+    let framesReceived = 0;
+    let framesSent = 0;
+
+    // Connect to Sarvam Official Streaming STT WebSocket
     let sarvamWs: WebSocket | null = null;
     try {
       sarvamWs = new WebSocket(this.SARVAM_STT_WS_URL, {
@@ -89,7 +121,7 @@ export class SarvamVoiceService {
       });
       session.sarvamWs = sarvamWs;
     } catch (err: any) {
-      console.error('[SarvamVoiceService] Failed to create Sarvam WebSocket:', err);
+      console.error('[Sarvam] Failed to create Sarvam WebSocket:', err);
       clientWs.send(
         JSON.stringify({
           type: 'error',
@@ -100,7 +132,7 @@ export class SarvamVoiceService {
     }
 
     sarvamWs.on('open', () => {
-      console.log(`[SarvamVoiceService] 🟢 Connected to Sarvam Saaras v3 STT for session: ${sessionId}`);
+      console.log('[Sarvam] Sarvam STT WS connected');
       clientWs.send(
         JSON.stringify({
           type: 'ready',
@@ -110,15 +142,15 @@ export class SarvamVoiceService {
       );
     });
 
+    let lastTranscript = '';
+    let turnTimer: any = null;
+
     sarvamWs.on('message', async (data: WebSocket.Data) => {
       try {
         const rawStr = data.toString();
         const msg = JSON.parse(rawStr);
 
-        let lastTranscript = '';
-        let turnTimer: any = null;
-
-        // 1. Server-side VAD & speech detection -> Trigger Barge-In on client
+        // 1. Server-side speech detection -> Trigger Barge-In on client
         if (msg.event === 'speech_started' || msg.type === 'speech_started' || msg.speech_detected) {
           if (turnTimer) clearTimeout(turnTimer);
           clientWs.send(
@@ -129,7 +161,7 @@ export class SarvamVoiceService {
           );
         }
 
-        // 2. Extract transcript from all known Sarvam Saaras v3 formats
+        // 2. Extract transcript from official Sarvam Streaming STT formats
         const transcriptText =
           msg.transcript ||
           msg.text ||
@@ -149,9 +181,12 @@ export class SarvamVoiceService {
 
         if (transcriptText) {
           lastTranscript = transcriptText.trim();
+          console.log(`[Sarvam] Transcript: ${lastTranscript}`);
+
           const langCode = msg.language_code || msg.data?.language_code;
           if (langCode) {
             session.detectedLanguage = langCode;
+            console.log(`[Sarvam] Detected language: ${langCode}`);
           }
 
           clientWs.send(
@@ -184,12 +219,12 @@ export class SarvamVoiceService {
           }
         }
       } catch (parseErr) {
-        console.error('[SarvamVoiceService] Error handling Sarvam STT message:', parseErr);
+        console.error('[Sarvam] Error handling Sarvam STT message:', parseErr);
       }
     });
 
     sarvamWs.on('error', (err) => {
-      console.error('[SarvamVoiceService] ❌ Sarvam STT WebSocket Error:', err);
+      console.error('[Sarvam] ❌ Sarvam STT WebSocket Error:', err);
       clientWs.send(
         JSON.stringify({
           type: 'error',
@@ -199,37 +234,55 @@ export class SarvamVoiceService {
     });
 
     sarvamWs.on('close', (code, reason) => {
-      console.log(`[SarvamVoiceService] 🔴 Sarvam STT WebSocket closed: ${code} - ${reason.toString()}`);
+      console.log(`[Sarvam] 🔴 Sarvam STT WebSocket closed: ${code} - ${reason.toString()}`);
     });
 
     // Client WebSocket message handler (receiving 16kHz PCM audio stream or control commands)
     clientWs.on('message', async (data: WebSocket.Data) => {
       try {
         if (Buffer.isBuffer(data)) {
-          // Binary 16kHz Linear16 PCM audio chunk from AudioWorklet
+          framesReceived++;
+          if (framesReceived % 10 === 0) {
+            console.log(`[Sarvam] Audio frames received: ${framesReceived}`);
+          }
+
+          // Format raw PCM into Sarvam structured AudioContent
           if (sarvamWs && sarvamWs.readyState === WebSocket.OPEN) {
-            const base64Audio = data.toString('base64');
-            sarvamWs.send(
-              JSON.stringify({
-                event: 'audio_input',
-                audio: base64Audio,
-              })
-            );
+            const wavBuffer = SarvamVoiceService.createWavBuffer(data, 16000);
+            const payload = {
+              audio: {
+                data: wavBuffer.toString('base64'),
+                encoding: 'audio/wav',
+                sample_rate: 16000,
+              },
+            };
+            sarvamWs.send(JSON.stringify(payload));
+            framesSent++;
+            if (framesSent % 10 === 0) {
+              console.log(`[Sarvam] Audio frames sent to Sarvam: ${framesSent}`);
+            }
           }
         } else {
           // Text / JSON command from client
           const msg = JSON.parse(data.toString());
 
           if (msg.type === 'audio_chunk' && msg.audio) {
+            framesReceived++;
             if (sarvamWs && sarvamWs.readyState === WebSocket.OPEN) {
-              sarvamWs.send(
-                JSON.stringify({
-                  event: 'audio_input',
-                  audio: msg.audio,
-                })
-              );
+              const rawPcm = Buffer.from(msg.audio, 'base64');
+              const wavBuffer = SarvamVoiceService.createWavBuffer(rawPcm, 16000);
+              const payload = {
+                audio: {
+                  data: wavBuffer.toString('base64'),
+                  encoding: 'audio/wav',
+                  sample_rate: 16000,
+                },
+              };
+              sarvamWs.send(JSON.stringify(payload));
+              framesSent++;
             }
           } else if (msg.type === 'text_command' && msg.text) {
+            console.log(`[Sarvam] Transcript: ${msg.text}`);
             await this.processVoiceTurn(session, msg.text);
           } else if (msg.type === 'update_context') {
             if (msg.currentRoute) session.currentRoute = msg.currentRoute;
@@ -237,12 +290,12 @@ export class SarvamVoiceService {
           }
         }
       } catch (err) {
-        console.error('[SarvamVoiceService] Error processing client message:', err);
+        console.error('[Sarvam] Error processing client message:', err);
       }
     });
 
     clientWs.on('close', () => {
-      console.log(`[SarvamVoiceService] Client disconnected for session: ${sessionId}`);
+      console.log(`[Sarvam] Client disconnected for session: ${sessionId}`);
       if (sarvamWs && sarvamWs.readyState === WebSocket.OPEN) {
         sarvamWs.close();
       }
@@ -278,6 +331,9 @@ export class SarvamVoiceService {
 
       const responseText = result.spokenResponse;
       const detectedLanguage = result.detectedLanguage || session.detectedLanguage || 'kannada_english';
+
+      console.log(`[Sarvam] Detected language: ${detectedLanguage}`);
+      console.log(`[Sarvam] VoiceAgent response: ${responseText}`);
 
       // 2. Synthesize with Sarvam Bulbul v3 TTS
       const ttsAudio = await this.synthesizeSpeechBulbulV3(responseText, detectedLanguage);
