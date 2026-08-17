@@ -16,6 +16,7 @@ import { AdminController } from '../controllers/admin.controller';
 import { authenticateJWT, requireRole } from '../middleware/auth.middleware';
 import { uploadInvoice } from '../middleware/upload.middleware';
 import { RoleType } from '@prisma/client';
+import { prisma } from '../utils/prisma';
 
 const router = Router();
 
