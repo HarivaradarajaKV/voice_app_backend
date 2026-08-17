@@ -115,8 +115,12 @@ export class SarvamVoiceService {
         const rawStr = data.toString();
         const msg = JSON.parse(rawStr);
 
+        let lastTranscript = '';
+        let turnTimer: any = null;
+
         // 1. Server-side VAD & speech detection -> Trigger Barge-In on client
         if (msg.event === 'speech_started' || msg.type === 'speech_started' || msg.speech_detected) {
+          if (turnTimer) clearTimeout(turnTimer);
           clientWs.send(
             JSON.stringify({
               type: 'barge_in',
@@ -125,23 +129,26 @@ export class SarvamVoiceService {
           );
         }
 
-        // 2. Interim / Partial transcripts
+        // 2. Extract transcript from all known Sarvam Saaras v3 formats
         const transcriptText =
           msg.transcript ||
           msg.text ||
           msg.data?.transcript ||
           msg.data?.text ||
           (msg.results && msg.results[0]?.transcript) ||
+          (msg.data?.results && msg.data.results[0]?.transcript) ||
           '';
 
         const isFinal =
           msg.is_final === true ||
           msg.type === 'final' ||
           msg.event === 'final_transcript' ||
-          msg.data?.is_final === true;
+          msg.data?.is_final === true ||
+          msg.event === 'speech_ended' ||
+          msg.type === 'speech_ended';
 
         if (transcriptText) {
-          // Detect/carry language code if provided by Sarvam
+          lastTranscript = transcriptText.trim();
           const langCode = msg.language_code || msg.data?.language_code;
           if (langCode) {
             session.detectedLanguage = langCode;
@@ -156,11 +163,24 @@ export class SarvamVoiceService {
             })
           );
 
-          // 3. Process complete voice command on final transcript
-          if (isFinal && transcriptText.trim().length > 0 && !session.isProcessingTurn) {
+          if (isFinal && lastTranscript.length > 0 && !session.isProcessingTurn) {
+            if (turnTimer) clearTimeout(turnTimer);
             session.isProcessingTurn = true;
-            await this.processVoiceTurn(session, transcriptText.trim());
+            await this.processVoiceTurn(session, lastTranscript);
             session.isProcessingTurn = false;
+            lastTranscript = '';
+          } else if (!isFinal && lastTranscript.length > 0) {
+            // Silence timer: finalize if no new audio received in 1200ms
+            if (turnTimer) clearTimeout(turnTimer);
+            turnTimer = setTimeout(async () => {
+              if (lastTranscript.length > 0 && !session.isProcessingTurn) {
+                session.isProcessingTurn = true;
+                const toProcess = lastTranscript;
+                lastTranscript = '';
+                await this.processVoiceTurn(session, toProcess);
+                session.isProcessingTurn = false;
+              }
+            }, 1200);
           }
         }
       } catch (parseErr) {
