@@ -110,6 +110,7 @@ export class SarvamVoiceService {
 
     let framesReceived = 0;
     let framesSent = 0;
+    const pendingAudioQueue: Buffer[] = [];
 
     // Connect to Sarvam Official Streaming STT WebSocket
     let sarvamWs: WebSocket | null = null;
@@ -140,6 +141,24 @@ export class SarvamVoiceService {
           engine: 'sarvam_saaras_v3',
         })
       );
+
+      // Flush buffered audio frames
+      while (pendingAudioQueue.length > 0) {
+        const chunk = pendingAudioQueue.shift()!;
+        const wavBuffer = SarvamVoiceService.createWavBuffer(chunk, 16000);
+        const payload = {
+          audio: {
+            data: wavBuffer.toString('base64'),
+            encoding: 'audio/wav',
+            sample_rate: 16000,
+          },
+        };
+        sarvamWs.send(JSON.stringify(payload));
+        framesSent++;
+      }
+      if (framesSent > 0) {
+        console.log(`[Sarvam] Audio frames sent to Sarvam: ${framesSent}`);
+      }
     });
 
     let lastTranscript = '';
@@ -246,7 +265,6 @@ export class SarvamVoiceService {
             console.log(`[Sarvam] Audio frames received: ${framesReceived}`);
           }
 
-          // Format raw PCM into Sarvam structured AudioContent
           if (sarvamWs && sarvamWs.readyState === WebSocket.OPEN) {
             const wavBuffer = SarvamVoiceService.createWavBuffer(data, 16000);
             const payload = {
@@ -261,6 +279,8 @@ export class SarvamVoiceService {
             if (framesSent % 10 === 0) {
               console.log(`[Sarvam] Audio frames sent to Sarvam: ${framesSent}`);
             }
+          } else {
+            pendingAudioQueue.push(data);
           }
         } else {
           // Text / JSON command from client
@@ -268,8 +288,8 @@ export class SarvamVoiceService {
 
           if (msg.type === 'audio_chunk' && msg.audio) {
             framesReceived++;
+            const rawPcm = Buffer.from(msg.audio, 'base64');
             if (sarvamWs && sarvamWs.readyState === WebSocket.OPEN) {
-              const rawPcm = Buffer.from(msg.audio, 'base64');
               const wavBuffer = SarvamVoiceService.createWavBuffer(rawPcm, 16000);
               const payload = {
                 audio: {
@@ -280,6 +300,8 @@ export class SarvamVoiceService {
               };
               sarvamWs.send(JSON.stringify(payload));
               framesSent++;
+            } else {
+              pendingAudioQueue.push(rawPcm);
             }
           } else if (msg.type === 'text_command' && msg.text) {
             console.log(`[Sarvam] Transcript: ${msg.text}`);
