@@ -40,7 +40,7 @@ export interface SarvamVoiceSession {
 
 export class SarvamVoiceService {
   private static readonly SARVAM_STT_WS_URL =
-    'wss://api.sarvam.ai/speech-to-text-realtime/ws?model=saaras:v3-realtime&language_code=unknown';
+    'wss://api.sarvam.ai/speech-to-text-realtime/ws?model=saaras:v3-realtime&language_code=auto';
   private static readonly SARVAM_TTS_REST_URL = 'https://api.sarvam.ai/text-to-speech';
 
   /**
